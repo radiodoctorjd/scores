@@ -3,46 +3,154 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pro Sports Dashboard</title>
+    <title>Sports Dashboard - Blank Slate</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        /* Custom styles for your requested Dark/Yellow theme */
-        .dark-theme { background-color: #111827; color: #f3f4f6; }
         .yellow-theme { background-color: #fefce8; color: #111827; }
-        
-        /* Pulse animation for Live games */
-        .animate-ping-slow {
-            animation: ping 2s cubic-bezier(0, 0, 0.2, 1) infinite;
-        }
-        @keyframes ping {
-            75%, 100% { transform: scale(2); opacity: 0; }
-        }
-
-        /* Custom Scrollbar for a cleaner look */
-        ::-webkit-scrollbar { width: 8px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: #888; border-radius: 10px; }
-        ::-webkit-scrollbar-thumb:hover { background: #555; }
+        .dark-theme { background-color: #0f172a; color: #f8fafc; }
+        .card { transition: transform 0.2s; }
+        .card:hover { transform: translateY(-2px); }
     </style>
 </head>
-<body id="body" class="yellow-theme min-h-screen p-4 md:p-8 transition-colors duration-500">
+<body id="appBody" class="yellow-theme min-h-screen p-4 font-sans">
 
-    <div class="max-w-6xl mx-auto">
-        <div class="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
-            <h1 class="text-4xl font-black tracking-tighter">SPORTS DASHBOARD</h1>
-            <div class="flex items-center gap-4">
-                <span id="lastUpdated" class="text-xs opacity-50 font-mono"></span>
-                <button id="themeToggle" class="px-6 py-2 rounded-full border-2 border-current font-bold hover:bg-black hover:text-white transition-all uppercase text-sm">
-                    Toggle Dark Mode
-                </button>
-            </div>
+    <div class="max-w-4xl mx-auto">
+        <div class="flex justify-between items-center mb-8">
+            <h1 class="text-3xl font-black tracking-tight">LIVE SCORES</h1>
+            <button onclick="toggleTheme()" class="bg-black text-white px-4 py-2 rounded-lg text-xs font-bold uppercase">Toggle Theme</button>
         </div>
 
-        <div class="bg-white/50 backdrop-blur-md p-4 rounded-2xl shadow-sm border border-black/5 mb-8 flex flex-col md:flex-row gap-4 sticky top-4 z-50">
-            <div id="leagueSwitcher" class="flex gap-2 overflow-x-auto pb-2 md:pb-0 no-scrollbar">
-                </div>
-            <input type="text" id="teamSearch" placeholder="Search team or city..." 
-                class="flex-1 bg-white border border-gray-300 rounded-xl px-4 py-2 text-black focus:ring-4 focus:ring-blue-500/20 outline-none transition-all shadow-inner">
+        <div id="leagueBar" class="flex gap-2 mb-6 overflow-x-auto pb-2 border-b border-black/10"></div>
+
+        <div class="mb-8">
+            <input type="text" id="search" placeholder="Filter by team..." class="w-full p-3 rounded-xl border border-black/20 bg-white/50 focus:bg-white outline-none transition-all">
         </div>
 
-        <div id="loader" class="hidden flex flex-col items-center justify-center py-
+        <div id="statusMessage" class="text-center py-10 font-medium opacity-50">Initializing connection...</div>
+        <div id="gameGrid" class="grid gap-4 md:grid-cols-2"></div>
+
+        <div class="mt-20 p-4 border-t border-dashed border-black/20 text-[10px] font-mono opacity-30">
+            <p id="debugLog">System Ready.</p>
+        </div>
+    </div>
+
+    <script>
+        const CONFIG = {
+            leagues: [
+                { id: "NHL", path: "hockey/nhl" },
+                { id: "NBA", path: "basketball/nba" },
+                { id: "MLB", path: "baseball/mlb" },
+                { id: "NFL", path: "football/nfl" },
+                { id: "WNBA", path: "basketball/wnba" },
+                { id: "NCAAM", path: "basketball/mens-college-basketball" }
+            ],
+            proxy: "https://api.allorigins.win/get?url="
+        };
+
+        let currentLeague = "NHL";
+        let allGames = [];
+
+        function log(msg) {
+            console.log(msg);
+            document.getElementById('debugLog').innerText = `LOG: ${msg}`;
+        }
+
+        async function loadData() {
+            const grid = document.getElementById('gameGrid');
+            const status = document.getElementById('statusMessage');
+            
+            status.innerText = `Fetching ${currentLeague} data...`;
+            log(`Starting fetch for ${currentLeague}`);
+
+            try {
+                const target = `https://site.api.espn.com/apis/site/v2/sports/${CONFIG.leagues.find(l => l.id === currentLeague).path}/scoreboard`;
+                const response = await fetch(`${CONFIG.proxy}${encodeURIComponent(target)}&t=${Date.now()}`);
+                
+                if (!response.ok) throw new Error("Proxy connection failed");
+                
+                const wrapper = await response.json();
+                const data = JSON.parse(wrapper.contents);
+                
+                allGames = data.events || [];
+                render();
+                
+                status.innerText = allGames.length > 0 ? "" : "No games found for today.";
+                log(`Found ${allGames.length} events.`);
+            } catch (err) {
+                log(`ERROR: ${err.message}`);
+                status.innerHTML = `<span class="text-red-500">Connection Blocked.</span><br><small>If you are running this as a local file, your browser may be blocking the data. Try hosting on GitHub Pages.</small>`;
+            }
+        }
+
+        function render() {
+            const grid = document.getElementById('gameGrid');
+            const query = document.getElementById('search').value.toLowerCase();
+            
+            grid.innerHTML = "";
+            
+            const filtered = allGames.filter(event => {
+                const name = event.name.toLowerCase();
+                return name.includes(query);
+            });
+
+            filtered.forEach(event => {
+                const comp = event.competitions[0];
+                const home = comp.competitors.find(c => c.slot === 'home');
+                const away = comp.competitors.find(c => c.slot === 'away');
+                const state = event.status.type.state;
+
+                const card = document.createElement('div');
+                card.className = "card bg-white dark:bg-slate-800 p-5 rounded-2xl shadow-sm border border-black/5 flex flex-col gap-4";
+                
+                card.innerHTML = `
+                    <div class="flex justify-between items-center text-[10px] font-bold opacity-50 uppercase tracking-widest">
+                        <span>${event.status.type.shortDetail}</span>
+                        ${state === 'in' ? '<span class="text-red-500 animate-pulse">● LIVE</span>' : ''}
+                    </div>
+                    <div class="space-y-3">
+                        <div class="flex justify-between items-center">
+                            <div class="flex items-center gap-3">
+                                <img src="${away.team.logo}" class="w-8 h-8" onerror="this.style.opacity=0">
+                                <span class="font-bold text-lg">${away.team.abbreviation}</span>
+                            </div>
+                            <span class="text-2xl font-black">${state !== 'pre' ? away.score : '-'}</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <div class="flex items-center gap-3">
+                                <img src="${home.team.logo}" class="w-8 h-8" onerror="this.style.opacity=0">
+                                <span class="font-bold text-lg">${home.team.abbreviation}</span>
+                            </div>
+                            <span class="text-2xl font-black">${state !== 'pre' ? home.score : '-'}</span>
+                        </div>
+                    </div>
+                `;
+                grid.appendChild(card);
+            });
+        }
+
+        function toggleTheme() {
+            const body = document.getElementById('appBody');
+            body.classList.toggle('yellow-theme');
+            body.classList.toggle('dark-theme');
+        }
+
+        // Initialize UI
+        const leagueBar = document.getElementById('leagueBar');
+        CONFIG.leagues.forEach(l => {
+            const btn = document.createElement('button');
+            btn.innerText = l.id;
+            btn.className = "px-4 py-1 rounded-full text-xs font-bold transition-all border border-black/10 hover:bg-black hover:text-white";
+            btn.onclick = () => {
+                currentLeague = l.id;
+                loadData();
+            };
+            leagueBar.appendChild(btn);
+        });
+
+        document.getElementById('search').oninput = render;
+
+        // Start
+        loadData();
+    </script>
+</body>
+</html>
