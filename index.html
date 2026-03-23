@@ -1,156 +1,248 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sports Dashboard - Blank Slate</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        .yellow-theme { background-color: #fefce8; color: #111827; }
-        .dark-theme { background-color: #0f172a; color: #f8fafc; }
-        .card { transition: transform 0.2s; }
-        .card:hover { transform: translateY(-2px); }
-    </style>
+<meta charset="UTF-8">
+<title>Sports Scores Dashboard</title>
+<style>
+body {
+    font-family: Arial, sans-serif;
+    margin: 0;
+    background: #0f172a;
+    color: white;
+}
+header {
+    padding: 15px;
+    text-align: center;
+    font-size: 24px;
+    font-weight: bold;
+    background: #020617;
+}
+.tabs {
+    display: flex;
+    overflow-x: auto;
+    background: #1e293b;
+}
+.tab {
+    padding: 12px 18px;
+    cursor: pointer;
+    border-bottom: 3px solid transparent;
+}
+.tab.active {
+    border-bottom: 3px solid #38bdf8;
+    background: #0f172a;
+}
+.section-title {
+    font-weight: bold;
+    font-size: 18px;
+    margin: 10px 0 5px;
+    text-align: center;
+}
+.content {
+    padding: 20px;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+}
+@media (max-width: 1024px) {
+    .content {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+@media (max-width: 768px) {
+    .content {
+        grid-template-columns: 1fr;
+    }
+}
+.game {
+    background: white;
+    color: black;
+    padding: 10px;
+    border-radius: 8px;
+}
+.team-line {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.team-line img {
+    width: 28px;
+    height: 28px;
+}
+.team-abbr {
+    font-weight: bold;
+}
+.team-fullname {
+    font-weight: bold;
+}
+.score {
+    font-weight: bold;
+    margin-left: 6px;
+    font-size: 16px;
+}
+.spacer {
+    height: 5px;
+}
+.status {
+    font-size: 14px;
+    color: #333;
+    margin-top: 5px;
+}
+.status small {
+    font-size: 12px;
+    color: #555;
+}
+</style>
 </head>
-<body id="appBody" class="yellow-theme min-h-screen p-4 font-sans">
+<body>
 
-    <div class="max-w-4xl mx-auto">
-        <div class="flex justify-between items-center mb-8">
-            <h1 class="text-3xl font-black tracking-tight">LIVE SCORES</h1>
-            <button onclick="toggleTheme()" class="bg-black text-white px-4 py-2 rounded-lg text-xs font-bold uppercase">Toggle Theme</button>
-        </div>
+<header>Sports Scores Dashboard</header>
 
-        <div id="leagueBar" class="flex gap-2 mb-6 overflow-x-auto pb-2 border-b border-black/10"></div>
+<div class="tabs" id="tabs"></div>
+<div id="content-container"></div>
 
-        <div class="mb-8">
-            <input type="text" id="search" placeholder="Filter by team..." class="w-full p-3 rounded-xl border border-black/20 bg-white/50 focus:bg-white outline-none transition-all">
-        </div>
+<script>
+const leagues = {
+    NHL: "hockey/nhl",
+    MLB: "baseball/mlb",
+    NFL: "football/nfl",
+    NBA: "basketball/nba",
+    WNBA: "basketball/wnba",
+    NCAAMB: "basketball/mens-college-basketball"
+};
 
-        <div id="statusMessage" class="text-center py-10 font-medium opacity-50">Initializing connection...</div>
-        <div id="gameGrid" class="grid gap-4 md:grid-cols-2"></div>
+let currentLeague = "NHL";
+const tabsDiv = document.getElementById("tabs");
+const containerDiv = document.getElementById("content-container");
 
-        <div class="mt-20 p-4 border-t border-dashed border-black/20 text-[10px] font-mono opacity-30">
-            <p id="debugLog">System Ready.</p>
-        </div>
-    </div>
+function getDateString(offset) {
+    const d = new Date();
+    d.setDate(d.getDate() + offset);
+    return d.toISOString().split("T")[0].replace(/-/g, "");
+}
 
-    <script>
-        const CONFIG = {
-            leagues: [
-                { id: "NHL", path: "hockey/nhl" },
-                { id: "NBA", path: "basketball/nba" },
-                { id: "MLB", path: "baseball/mlb" },
-                { id: "NFL", path: "football/nfl" },
-                { id: "WNBA", path: "basketball/wnba" },
-                { id: "NCAAM", path: "basketball/mens-college-basketball" }
-            ],
-            proxy: "https://api.allorigins.win/get?url="
-        };
+Object.keys(leagues).forEach(league => {
+    const tab = document.createElement("div");
+    tab.className = "tab" + (league === currentLeague ? " active" : "");
+    tab.innerText = league;
+    tab.onclick = () => {
+        document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+        tab.classList.add("active");
+        currentLeague = league;
+        loadGames();
+    };
+    tabsDiv.appendChild(tab);
+});
 
-        let currentLeague = "NHL";
-        let allGames = [];
+async function loadGames() {
+    containerDiv.innerHTML = "";
+    const endpoint = leagues[currentLeague];
+    const offsets = [0, 1, -1];
+    const sectionTitles = ["Today's Games", "Tomorrow's Games", "Yesterday's Games"];
+    let hasGames = false;
 
-        function log(msg) {
-            console.log(msg);
-            document.getElementById('debugLog').innerText = `LOG: ${msg}`;
-        }
+    for (let i = 0; i < offsets.length; i++) {
+        const offset = offsets[i];
+        const dateStr = getDateString(offset);
 
-        async function loadData() {
-            const grid = document.getElementById('gameGrid');
-            const status = document.getElementById('statusMessage');
-            
-            status.innerText = `Fetching ${currentLeague} data...`;
-            log(`Starting fetch for ${currentLeague}`);
+        try {
+            const res = await fetch(`https://site.api.espn.com/apis/site/v2/sports/${endpoint}/scoreboard?dates=${dateStr}`);
+            const data = await res.json();
+            const events = data.events;
 
-            try {
-                const target = `https://site.api.espn.com/apis/site/v2/sports/${CONFIG.leagues.find(l => l.id === currentLeague).path}/scoreboard`;
-                const response = await fetch(`${CONFIG.proxy}${encodeURIComponent(target)}&t=${Date.now()}`);
-                
-                if (!response.ok) throw new Error("Proxy connection failed");
-                
-                const wrapper = await response.json();
-                const data = JSON.parse(wrapper.contents);
-                
-                allGames = data.events || [];
-                render();
-                
-                status.innerText = allGames.length > 0 ? "" : "No games found for today.";
-                log(`Found ${allGames.length} events.`);
-            } catch (err) {
-                log(`ERROR: ${err.message}`);
-                status.innerHTML = `<span class="text-red-500">Connection Blocked.</span><br><small>If you are running this as a local file, your browser may be blocking the data. Try hosting on GitHub Pages.</small>`;
-            }
-        }
+            if (!events || events.length === 0) continue;
+            hasGames = true;
 
-        function render() {
-            const grid = document.getElementById('gameGrid');
-            const query = document.getElementById('search').value.toLowerCase();
-            
-            grid.innerHTML = "";
-            
-            const filtered = allGames.filter(event => {
-                const name = event.name.toLowerCase();
-                return name.includes(query);
-            });
+            const titleDiv = document.createElement("div");
+            titleDiv.className = "section-title";
+            titleDiv.innerText = sectionTitles[i];
+            containerDiv.appendChild(titleDiv);
 
-            filtered.forEach(event => {
+            const contentDiv = document.createElement("div");
+            contentDiv.className = "content";
+            containerDiv.appendChild(contentDiv);
+
+            events.forEach(event => {
                 const comp = event.competitions[0];
-                const home = comp.competitors.find(c => c.slot === 'home');
-                const away = comp.competitors.find(c => c.slot === 'away');
+                const teams = comp.competitors;
+
+                const home = teams.find(t => t.homeAway === "home");
+                const away = teams.find(t => t.homeAway === "away");
+
+                const isFinal = event.status.type.completed;
                 const state = event.status.type.state;
 
-                const card = document.createElement('div');
-                card.className = "card bg-white dark:bg-slate-800 p-5 rounded-2xl shadow-sm border border-black/5 flex flex-col gap-4";
-                
-                card.innerHTML = `
-                    <div class="flex justify-between items-center text-[10px] font-bold opacity-50 uppercase tracking-widest">
-                        <span>${event.status.type.shortDetail}</span>
-                        ${state === 'in' ? '<span class="text-red-500 animate-pulse">● LIVE</span>' : ''}
+                let displayStatus = "";
+                let showScore = false;
+
+                if (isFinal) {
+                    displayStatus = "Final";
+                    showScore = true;
+                } else if (state === "in") {
+                    displayStatus = "LIVE - " + event.status.type.detail;
+                    showScore = true;
+                } else {
+                    const gameTime = new Date(event.date).toLocaleTimeString([], {
+                        hour: '2-digit',
+                        minute: '2-digit'
+                    });
+                    displayStatus = gameTime;
+                }
+
+                let broadcast = "";
+                if (!isFinal && comp.broadcasts && comp.broadcasts.length > 0) {
+                    broadcast = comp.broadcasts.map(b => b.names).join(", ");
+                }
+
+                const gameDiv = document.createElement("div");
+                gameDiv.className = "game";
+
+                let scoreHTML = "";
+                if (showScore) {
+                    let winner, loser;
+                    if (Number(home.score) >= Number(away.score)) {
+                        winner = home;
+                        loser = away;
+                    } else {
+                        winner = away;
+                        loser = home;
+                    }
+
+                    scoreHTML = `
+                        <div class="spacer"></div>
+                        <div class="line team-fullname">${winner.team.displayName} ${winner.score}</div>
+                        <div class="line team-fullname">${loser.team.displayName} ${loser.score}</div>
+                        <div class="spacer"></div>
+                    `;
+                }
+
+                const matchupHTML = `
+                    <div class="team-line">
+                        <img src="${away.team.logo}" alt="${away.team.abbreviation} logo">
+                        <span class="team-abbr">${away.team.abbreviation}</span>
+                        <span>@</span>
+                        <img src="${home.team.logo}" alt="${home.team.abbreviation} logo">
+                        <span class="team-abbr">${home.team.abbreviation}</span>
                     </div>
-                    <div class="space-y-3">
-                        <div class="flex justify-between items-center">
-                            <div class="flex items-center gap-3">
-                                <img src="${away.team.logo}" class="w-8 h-8" onerror="this.style.opacity=0">
-                                <span class="font-bold text-lg">${away.team.abbreviation}</span>
-                            </div>
-                            <span class="text-2xl font-black">${state !== 'pre' ? away.score : '-'}</span>
-                        </div>
-                        <div class="flex justify-between items-center">
-                            <div class="flex items-center gap-3">
-                                <img src="${home.team.logo}" class="w-8 h-8" onerror="this.style.opacity=0">
-                                <span class="font-bold text-lg">${home.team.abbreviation}</span>
-                            </div>
-                            <span class="text-2xl font-black">${state !== 'pre' ? home.score : '-'}</span>
-                        </div>
-                    </div>
+                    <div class="spacer"></div>
+                    ${scoreHTML}
+                    <div class="line">${displayStatus}</div>
+                    ${broadcast ? `<div class="status"><small>Watch: ${broadcast}</small></div>` : ""}
                 `;
-                grid.appendChild(card);
+
+                gameDiv.innerHTML = matchupHTML;
+                contentDiv.appendChild(gameDiv);
             });
+
+        } catch (err) {
+            console.error(err);
         }
+    }
 
-        function toggleTheme() {
-            const body = document.getElementById('appBody');
-            body.classList.toggle('yellow-theme');
-            body.classList.toggle('dark-theme');
-        }
+    if (!hasGames) containerDiv.innerHTML = "";
+}
 
-        // Initialize UI
-        const leagueBar = document.getElementById('leagueBar');
-        CONFIG.leagues.forEach(l => {
-            const btn = document.createElement('button');
-            btn.innerText = l.id;
-            btn.className = "px-4 py-1 rounded-full text-xs font-bold transition-all border border-black/10 hover:bg-black hover:text-white";
-            btn.onclick = () => {
-                currentLeague = l.id;
-                loadData();
-            };
-            leagueBar.appendChild(btn);
-        });
+loadGames();
+</script>
 
-        document.getElementById('search').oninput = render;
-
-        // Start
-        loadData();
-    </script>
 </body>
 </html>
