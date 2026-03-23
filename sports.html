@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sports Scoreboard Pro</title>
+    <style>
+        :root { --bg: #0a0a0a; --card: #161616; --accent: #ff3e3e; --text: #e0e0e0; --border: #222; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding-top: 60px; }
+        .filter-bar { position: fixed; top: 0; left: 0; right: 0; background: rgba(10, 10, 10, 0.9); backdrop-filter: blur(10px); padding: 10px; z-index: 1000; border-bottom: 1px solid var(--border); display: flex; gap: 8px; justify-content: center; overflow-x: auto; }
+        .filter-btn { background: #222; border: 1px solid var(--border); color: #888; padding: 5px 12px; border-radius: 15px; cursor: pointer; white-space: nowrap; font-size: 12px; }
+        .filter-btn.active { background: var(--accent); color: white; border-color: var(--accent); }
+        .container { max-width: 600px; margin: auto; padding: 10px; }
+        .league-card { background: var(--card); border-radius: 10px; margin-bottom: 15px; border: 1px solid var(--border); }
+        .league-header { padding: 10px 15px; font-weight: bold; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; font-size: 13px; color: #aaa; }
+        .game { display: grid; grid-template-columns: 1fr 80px 1fr; align-items: center; padding: 12px 15px; border-bottom: 1px solid #1f1f1f; }
+        .team { display: flex; align-items: center; gap: 10px; }
+        .team img { width: 24px; height: 24px; }
+        .score-box { text-align: center; font-family: "Courier New", monospace; }
+        .status { display: block; font-size: 10px; color: #666; margin-top: 4px; text-transform: uppercase; }
+        .live { color: #2ecc71 !important; font-weight: bold; }
+        #debug { font-size: 10px; color: #444; text-align: center; margin-top: 20px; padding: 10px; border-top: 1px dashed #222; }
+    </style>
+</head>
+<body>
+
+<div class="filter-bar" id="filters"></div>
+<div class="container" id="main"></div>
+<div id="debug">System: Initializing...</div>
+
+<script>
+    const leagues = [
+        { id: "nhl", name: "NHL", url: "hockey/nhl" },
+        { id: "nba", name: "NBA", url: "basketball/nba" },
+        { id: "mlb", name: "MLB", url: "baseball/mlb" },
+        { id: "nfl", name: "NFL", url: "football/nfl" },
+        { id: "wnba", name: "WNBA", url: "basketball/wnba" },
+        { id: "ncaam", name: "NCAAM", url: "basketball/mens-college-basketball" }
+    ];
+
+    const main = document.getElementById('main');
+    const debug = document.getElementById('debug');
+
+    function log(msg) { debug.innerText = `Log: ${msg}`; console.log(msg); }
+
+    async function getScores(league) {
+        const card = document.createElement('div');
+        card.className = 'league-card';
+        card.id = `card-${league.id}`;
+        card.innerHTML = `<div class="league-header">${league.name} <span>Loading...</span></div>`;
+        main.appendChild(card);
+
+        try {
+            // Using a different proxy: Cloudflare Workers Proxy (alternative to AllOrigins)
+            const target = `https://site.api.espn.com/apis/site/v2/sports/${league.url}/scoreboard`;
+            const proxy = `https://api.allorigins.win/get?url=${encodeURIComponent(target)}&_=${Date.now()}`;
+            
+            const res = await fetch(proxy);
+            const wrapper = await res.json();
+            const data = JSON.parse(wrapper.contents);
+            
+            render(league, data.events || [], card);
+            log(`Successfully updated ${league.name}`);
+        } catch (e) {
+            log(`Error in ${league.name}: ${e.message}`);
+            card.innerHTML = `<div class="league-header">${league.name} <span style="color:red">Error</span></div><div style="padding:15px; font-size:12px; color:#555;">Could not reach ESPN. Check your adblocker.</div>`;
+        }
+    }
+
+    function render(league, events, card) {
+        let html = `<div class="league-header">${league.name} <span>${events.length} Games</span></div>`;
+        if (events.length === 0) {
+            html += `<div style="padding:15px; color:#444; font-size:12px;">No games today</div>`;
+        } else {
+            events.forEach(ev => {
+                const comp = ev.competitions[0];
+                const home = comp.competitors.find(c => c.slot === 'home');
+                const away = comp.competitors.find(c => c.slot === 'away');
+                const isLive = ev.status.type.state === 'in';
+                html += `
+                    <div class="game">
+                        <div class="team">
+                            <img src="${away.team.logo || ''}" onerror="this.style.opacity=0">
+                            <span>${away.team.abbreviation}</span>
+                        </div>
+                        <div class="score-box">
+                            <div style="font-size:16px; font-weight:bold;">${away.score}-${home.score}</div>
+                            <span class="status ${isLive ? 'live' : ''}">${ev.status.type.shortDetail}</span>
+                        </div>
+                        <div class="team" style="justify-content: flex-end;">
+                            <span>${home.team.abbreviation}</span>
+                            <img src="${home.team.logo || ''}" onerror="this.style.opacity=0">
+                        </div>
+                    </div>
+                `;
+            });
+        }
+        card.innerHTML = html;
+    }
+
+    // Initialize Filters
+    leagues.forEach(l => {
+        const b = document.createElement('button');
+        b.className = 'filter-btn active';
+        b.innerText = l.name;
+        b.onclick = () => {
+            b.classList.toggle('active');
+            const c = document.getElementById(`card-${l.id}`);
+            c.style.display = b.classList.contains('active') ? 'block' : 'none';
+        };
+        document.getElementById('filters').appendChild(b);
+        getScores(l);
+    });
+
+</script>
+</body>
+</html>
