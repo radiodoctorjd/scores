@@ -3,331 +3,46 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sports Scoreboard Pro</title>
-    <style>
-        :root { --bg: #0d1117; --card: #161b22; --accent: #58a6ff; --text: #c9d1d9; --border: #30363d; }
-        body { font-family: -apple-system, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding-top: 60px; }
-        .filter-bar { position: fixed; top: 0; left: 0; right: 0; background: rgba(13, 17, 23, 0.9); backdrop-filter: blur(10px); padding: 10px; z-index: 1000; border-bottom: 1px solid var(--border); display: flex; gap: 8px; justify-content: center; }
-        .filter-btn { background: #21262d; border: 1px solid var(--border); color: #8b949e; padding: 5px 12px; border-radius: 6px; cursor: pointer; font-size: 12px; transition: 0.2s; }
-        .filter-btn.active { background: var(--accent); color: white; border-color: var(--accent); }
-        .container { max-width: 600px; margin: auto; padding: 10px; }
-        .league-card { background: var(--card); border-radius: 8px; margin-bottom: 15px; border: 1px solid var(--border); animation: fadeIn 0.5s; }
-        .league-header { padding: 10px 15px; font-weight: bold; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; font-size: 13px; background: #0d1117; }
-        .game { display: grid; grid-template-columns: 1fr 100px 1fr; align-items: center; padding: 12px 15px; border-bottom: 1px solid var(--border); }
-        .team { display: flex; align-items: center; gap: 10px; }
-        .team img { width: 24px; height: 24px; object-fit: contain; }
-        .score-box { text-align: center; }
-        .score-num { font-size: 18px; font-weight: bold; letter-spacing: 1px; }
-        .status { display: block; font-size: 10px; color: #8b949e; margin-top: 4px; text-transform: uppercase; font-weight: bold; }
-        .live { color: #3fb950 !important; }
-        .retry-btn { font-size: 10px; padding: 2px 8px; cursor: pointer; background: #21262d; color: var(--accent); border: 1px solid var(--border); border-radius: 4px; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
-    </style>
-</head>
-<body>
-
-<div class="filter-bar" id="filters"></div>
-<div class="container" id="main"></div>
-
-<script>
-    const leagues = [
-        { id: "nhl", name: "NHL", url: "hockey/nhl" },
-        { id: "nba", name: "NBA", url: "basketball/nba" },
-        { id: "mlb", name: "MLB", url: "baseball/mlb" },
-        { id: "nfl", name: "NFL", url: "football/nfl" },
-        { id: "wnba", name: "WNBA", url: "basketball/wnba" },
-        { id: "ncaam", name: "NCAAM", url: "basketball/mens-college-basketball" }
-    ];
-
-    const main = document.getElementById('main');
-
-    async function getScores(league, cardElement) {
-        cardElement.innerHTML = `<div class="league-header">${league.name} <span>Loading...</span></div>`;
-        
-        try {
-            const target = `https://site.api.espn.com/apis/site/v2/sports/${league.url}/scoreboard?t=${Date.now()}`;
-            // Switching to Corsproxy.io - a very fast, reliable proxy
-            const proxy = `https://corsproxy.io/?${encodeURIComponent(target)}`;
-            
-            const res = await fetch(proxy);
-            if (!res.ok) throw new Error('Proxy Blocked');
-            const data = await res.json();
-            
-            render(league, data.events || [], cardElement);
-        } catch (e) {
-            cardElement.innerHTML = `
-                <div class="league-header">
-                    ${league.name} 
-                    <button class="retry-btn" onclick="retry('${league.id}')">Try Again</button>
-                </div>
-                <div style="padding:15px; font-size:11px; color:#8b949e;">
-                    Browser blocked connection to ESPN. Try disabling AdBlock or <a href="https://github.com" style="color:var(--accent)">Host on GitHub</a>.
-                </div>`;
-        }
-    }
-
-    function retry(id) {
-        const league = leagues.find(l => l.id === id);
-        const card = document.getElementById(`card-${id}`);
-        getScores(league, card);
-    }
-
-    function render(league, events, card) {
-        let html = `<div class="league-header">${league.name} <span>${events.length} Games</span></div>`;
-        if (events.length === 0) {
-            html += `<div style="padding:15px; color:#8b949e; font-size:12px;">No games scheduled.</div>`;
-        } else {
-            events.forEach(ev => {
-                const comp = ev.competitions[0];
-                const home = comp.competitors.find(c => c.slot === 'home');
-                const away = comp.competitors.find(c => c.slot === 'away');
-                const isLive = ev.status.type.state === 'in';
-                html += `
-                    <div class="game">
-                        <div class="team">
-                            <img src="${away.team.logo || ''}" onerror="this.style.opacity=0">
-                            <span>${away.team.abbreviation}</span>
-                        </div>
-                        <div class="score-box">
-                            <div class="score-num">${away.score}-${home.score}</div>
-                            <span class="status ${isLive ? 'live' : ''}">${ev.status.type.shortDetail}</span>
-                        </div>
-                        <div class="team" style="justify-content: flex-end;">
-                            <span>${home.team.abbreviation}</span>
-                            <img src="${home.team.logo || ''}" onerror="this.style.opacity=0">
-                        </div>
-                    </div>
-                `;
-            });
-        }
-        card.innerHTML = html;
-    }
-
-    // Init
-    leagues.forEach(l => {
-        const b = document.createElement('button');
-        b.className = 'filter-btn active';
-        b.innerText = l.name;
-        b.onclick = () => {
-            b.classList.toggle('active');
-            document.getElementById(`card-${l.id}`).style.display = b.classList.contains('active') ? 'block' : 'none';
-        };
-        document.getElementById('filters').appendChild(b);
-
-        const card = document.createElement('div');
-        card.className = 'league-card';
-        card.id = `card-${l.id}`;
-        main.appendChild(card);
-        getScores(l, card);
-    });
-
-</script>
-</body>
-</html><!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sports Dashboard</title>
+    <title>Pro Sports Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        .animate-ping { animation: ping 1s cubic-bezier(0, 0, 0.2, 1) infinite; }
-        @keyframes ping { 75%, 100% { transform: scale(2); opacity: 0; } }
-        .dark { background-color: #111827; color: white; }
-        .light { background-color: #fefce8; color: black; }
-        .hidden { display: none; }
+        /* Custom styles for your requested Dark/Yellow theme */
+        .dark-theme { background-color: #111827; color: #f3f4f6; }
+        .yellow-theme { background-color: #fefce8; color: #111827; }
+        
+        /* Pulse animation for Live games */
+        .animate-ping-slow {
+            animation: ping 2s cubic-bezier(0, 0, 0.2, 1) infinite;
+        }
+        @keyframes ping {
+            75%, 100% { transform: scale(2); opacity: 0; }
+        }
+
+        /* Custom Scrollbar for a cleaner look */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #888; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: #555; }
     </style>
 </head>
-<body class="light min-h-screen p-6 transition-colors duration-300">
+<body id="body" class="yellow-theme min-h-screen p-4 md:p-8 transition-colors duration-500">
 
-    <div class="max-w-5xl mx-auto">
-        <div class="flex justify-between items-center mb-6">
-            <h1 class="text-3xl font-bold">Sports Dashboard</h1>
-            <button id="themeToggle" class="border border-gray-400 px-4 py-1 rounded hover:bg-gray-100 dark:hover:bg-gray-800">Dark</button>
+    <div class="max-w-6xl mx-auto">
+        <div class="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
+            <h1 class="text-4xl font-black tracking-tighter">SPORTS DASHBOARD</h1>
+            <div class="flex items-center gap-4">
+                <span id="lastUpdated" class="text-xs opacity-50 font-mono"></span>
+                <button id="themeToggle" class="px-6 py-2 rounded-full border-2 border-current font-bold hover:bg-black hover:text-white transition-all uppercase text-sm">
+                    Toggle Dark Mode
+                </button>
+            </div>
         </div>
 
-        <div class="flex gap-2 mb-6 flex-wrap">
-            <div id="leagueButtons" class="flex gap-2"></div>
-            <input type="text" id="teamSearch" placeholder="Search team..." class="flex-1 ml-2 border border-gray-300 rounded-lg px-4 py-1 text-black outline-none focus:ring-2 focus:ring-blue-500">
+        <div class="bg-white/50 backdrop-blur-md p-4 rounded-2xl shadow-sm border border-black/5 mb-8 flex flex-col md:flex-row gap-4 sticky top-4 z-50">
+            <div id="leagueSwitcher" class="flex gap-2 overflow-x-auto pb-2 md:pb-0 no-scrollbar">
+                </div>
+            <input type="text" id="teamSearch" placeholder="Search team or city..." 
+                class="flex-1 bg-white border border-gray-300 rounded-xl px-4 py-2 text-black focus:ring-4 focus:ring-blue-500/20 outline-none transition-all shadow-inner">
         </div>
 
-        <div id="loading" class="text-center py-10 hidden">
-            <div class="animate-spin inline-block w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full"></div>
-            <p class="mt-2 text-gray-500">Syncing with ESPN...</p>
-        </div>
-
-        <div id="todaySection"></div>
-        <div id="tomorrowSection"></div>
-        <div id="yesterdaySection"></div>
-    </div>
-
-    <div id="modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center hidden z-50">
-        <div class="bg-white dark:bg-gray-800 text-black dark:text-white p-6 rounded-xl w-96 shadow-2xl">
-            <h2 id="modalTitle" class="text-xl font-bold mb-4">Game Details</h2>
-            <div id="modalBody" class="text-sm space-y-2"></div>
-            <button onclick="closeModal()" class="mt-6 w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700">Close</button>
-        </div>
-    </div>
-
-    <script>
-        // Configuration
-        const LEAGUES = {
-            NHL: "hockey/nhl",
-            NBA: "basketball/nba",
-            MLB: "baseball/mlb",
-            NFL: "football/nfl",
-            WNBA: "basketball/wnba",
-            NCAAMB: "basketball/mens-college-basketball"
-        };
-
-        let currentLeague = "NHL";
-        let searchTerm = "";
-        let isDarkMode = false;
-        let gamesData = { yesterday: [], today: [], tomorrow: [] };
-
-        // Helper: Get ESPN URL with Proxy
-        const getUrl = (leagueKey, offset) => {
-            const date = new Date();
-            date.setDate(date.getDate() + offset);
-            const dateStr = date.toISOString().split('T')[0].replace(/-/g, '');
-            const target = `https://site.api.espn.com/apis/site/v2/sports/${LEAGUES[leagueKey]}/scoreboard?dates=${dateStr}`;
-            return `https://api.allorigins.win/get?url=${encodeURIComponent(target)}&t=${Date.now()}`;
-        };
-
-        // Data Normalization (Ported from your JSX)
-        const normalizeGame = (event) => {
-            const comp = event.competitions[0];
-            const home = comp.competitors.find(t => t.homeAway === "home");
-            const away = comp.competitors.find(t => t.homeAway === "away");
-            const homeScore = parseInt(home.score, 10);
-            const awayScore = parseInt(away.score, 10);
-            
-            let score = null;
-            if (['in', 'complete', 'post'].includes(comp.status.type.state)) {
-                score = `${away.team.abbreviation} ${away.score} - ${home.team.abbreviation} ${home.score}`;
-            }
-
-            return {
-                homeFull: `${home.team.location} ${home.team.name}`,
-                awayFull: `${away.team.location} ${away.team.name}`,
-                homeLogo: home.team.logo,
-                awayLogo: away.team.logo,
-                homeAbbr: home.team.abbreviation,
-                awayAbbr: away.team.abbreviation,
-                score,
-                status: comp.status.type.shortDetail,
-                state: comp.status.type.state,
-                date: new Date(event.date).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }),
-                broadcast: (comp.broadcasts || []).map(b => b.names).join(", ")
-            };
-        };
-
-        // UI Rendering
-        function render() {
-            renderSection("todaySection", "Today's Games", gamesData.today);
-            renderSection("tomorrowSection", "Tomorrow's Games", gamesData.tomorrow);
-            renderSection("yesterdaySection", "Yesterday's Results", gamesData.yesterday);
-        }
-
-        function renderSection(id, title, list) {
-            const container = document.getElementById(id);
-            const filtered = list.filter(g => 
-                g.homeFull.toLowerCase().includes(searchTerm) || 
-                g.awayFull.toLowerCase().includes(searchTerm) ||
-                g.homeAbbr.toLowerCase().includes(searchTerm) ||
-                g.awayAbbr.toLowerCase().includes(searchTerm)
-            );
-
-            if (filtered.length === 0) {
-                container.innerHTML = "";
-                return;
-            }
-
-            let html = `<h2 class="font-bold text-xl my-6 border-b border-gray-300 pb-2">${title}</h2>`;
-            html += `<div class="grid md:grid-cols-2 gap-4">`;
-            
-            filtered.forEach(g => {
-                const isLive = g.state === 'in';
-                html += `
-                    <div class="bg-white dark:bg-gray-800 p-4 rounded-xl shadow hover:shadow-lg transition-shadow cursor-pointer border border-gray-200 dark:border-gray-700" onclick="showModal('${g.awayFull} @ ${g.homeFull}', '${g.status}<br>Watch on: ${g.broadcast || 'N/A'}')">
-                        <div class="flex justify-between items-center mb-2">
-                            <div class="flex items-center gap-2">
-                                ${isLive ? `<span class="text-red-500 font-bold text-xs flex items-center gap-1"><span class="w-2 h-2 bg-red-500 rounded-full animate-ping"></span>LIVE</span>` : ''}
-                                <img src="${g.awayLogo}" class="w-6 h-6"> <span class="font-bold">${g.awayAbbr}</span>
-                                <span class="text-gray-400">@</span>
-                                <img src="${g.homeLogo}" class="w-6 h-6"> <span class="font-bold">${g.homeAbbr}</span>
-                            </div>
-                            <span class="text-xs text-gray-400">${g.date}</span>
-                        </div>
-                        <div class="text-lg font-mono">${g.score || 'No Score'}</div>
-                        <div class="text-xs mt-2 ${isLive ? 'text-green-500 font-bold' : 'text-gray-500'}">${g.status}</div>
-                    </div>
-                `;
-            });
-            html += `</div>`;
-            container.innerHTML = html;
-        }
-
-        // Logic
-        async function fetchData() {
-            document.getElementById('loading').classList.remove('hidden');
-            try {
-                const offsets = [-1, 0, 1];
-                const results = await Promise.all(offsets.map(async (o) => {
-                    const res = await fetch(getUrl(currentLeague, o));
-                    const wrapped = await res.json();
-                    return JSON.parse(wrapped.contents);
-                }));
-
-                gamesData = {
-                    yesterday: (results[0].events || []).map(normalizeGame),
-                    today: (results[1].events || []).map(normalizeGame),
-                    tomorrow: (results[2].events || []).map(normalizeGame)
-                };
-                render();
-            } catch (e) { console.error("Load failed", e); }
-            document.getElementById('loading').classList.add('hidden');
-        }
-
-        // Initialization & Events
-        document.getElementById('themeToggle').onclick = () => {
-            isDarkMode = !isDarkMode;
-            document.body.className = isDarkMode ? 'dark min-h-screen p-6' : 'light min-h-screen p-6';
-            document.getElementById('themeToggle').innerText = isDarkMode ? 'Light' : 'Dark';
-        };
-
-        document.getElementById('teamSearch').oninput = (e) => {
-            searchTerm = e.target.value.toLowerCase();
-            render();
-        };
-
-        const btnContainer = document.getElementById('leagueButtons');
-        Object.keys(LEAGUES).forEach(l => {
-            const btn = document.createElement('button');
-            btn.className = `px-4 py-1 rounded border border-gray-400 hover:bg-blue-500 hover:text-white transition-colors`;
-            btn.innerText = l;
-            btn.onclick = () => {
-                currentLeague = l;
-                document.querySelectorAll('#leagueButtons button').forEach(b => b.classList.remove('bg-blue-600', 'text-white'));
-                btn.classList.add('bg-blue-600', 'text-white');
-                fetchData();
-            };
-            if(l === "NHL") btn.classList.add('bg-blue-600', 'text-white');
-            btnContainer.appendChild(btn);
-        });
-
-        function showModal(title, body) {
-            document.getElementById('modalTitle').innerText = title;
-            document.getElementById('modalBody').innerHTML = body;
-            document.getElementById('modal').classList.remove('hidden');
-        }
-
-        function closeModal() {
-            document.getElementById('modal').classList.add('hidden');
-        }
-
-        fetchData();
-        setInterval(fetchData, 60000); // Update every minute
-    </script>
-</body>
-</html>
+        <div id="loader" class="hidden flex flex-col items-center justify-center py-
