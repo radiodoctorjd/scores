@@ -53,8 +53,20 @@ header {
     grid-template-columns: repeat(3, 1fr);
     gap: 12px;
 }
-@media (max-width:1024px){.content{grid-template-columns:repeat(2,1fr);}}
-@media (max-width:768px){.content{grid-template-columns:1fr!important;padding:15px;gap:10px;}}
+/* 2 columns for medium screens (tablets) */
+@media (max-width:1024px){
+    .content{
+        grid-template-columns: repeat(2,1fr);
+    }
+}
+/* 1 column for small screens (phones) */
+@media (max-width: 768px){
+    .content{
+        grid-template-columns: 1fr;
+        padding: 15px;
+        gap: 10px;
+    }
+}
 .game {
     background: white;
     color: black;
