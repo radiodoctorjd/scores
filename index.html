@@ -15,9 +15,10 @@ header { padding:15px; text-align:center; font-size:24px; font-weight:bold; back
 .tab.active { border-bottom:3px solid #38bdf8; background:#0f172a; }
 
 .section-title { text-align:center; font-weight:bold; margin:10px 0; }
+
 .content { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; padding:20px; }
 @media(max-width:1024px){ .content { grid-template-columns:repeat(2,1fr); } }
-@media(max-width:800px){ .content { grid-template-columns:1fr; } }
+@media(max-width:800px){ .content { grid-template-columns:1fr !important; } }
 
 .game { background:white; color:black; padding:12px; border-radius:10px; transition: transform 0.2s ease, box-shadow 0.2s ease; }
 .game:hover { transform: scale(1.02); box-shadow: 0 6px 16px rgba(0,0,0,0.25); }
@@ -29,23 +30,13 @@ header { padding:15px; text-align:center; font-size:24px; font-weight:bold; back
 .divider { border-top:1px solid #ddd; margin:6px 0; }
 
 .status { font-size:14px; color:#333; }
-.status small { font-size:12px; }
 
-@keyframes pulse {0%{transform:scale(1);}50%{transform:scale(1.2);}100%{transform:scale(1);}}
-.live-badge { background:red; color:white; font-size:11px; padding:2px 6px; border-radius:10px; margin-right:6px; animation:pulse 1s infinite; }
-
-@keyframes liveEnter {
-    0% { opacity:0; transform:translateY(10px); box-shadow:0 0 0 rgba(255,0,0,0); }
-    50% { opacity:1; transform:translateY(0); box-shadow:0 0 12px rgba(255,0,0,0.6); }
-    100% { opacity:1; transform:translateY(0); box-shadow:none; }
-}
-.live-animate { animation: liveEnter 0.6s ease-out; }
+.live-badge { background:red; color:white; font-size:11px; padding:2px 6px; border-radius:10px; margin-right:6px; }
 
 .scoreboard { margin-top:8px; font-size:12px; overflow-x:auto; }
 .scoreboard table { width:100%; border-collapse:collapse; }
 .scoreboard th, .scoreboard td { padding:4px 6px; text-align:center; }
 .scoreboard th { border-bottom:1px solid #ccc; }
-.scoreboard td { border-bottom:1px solid #eee; }
 .team-cell { text-align:left !important; font-weight:bold; }
 .total-cell { font-weight:bold; }
 </style>
@@ -176,11 +167,10 @@ function renderGame(event, grid){
     if(isLive||isFinal){
         const w=home.score>=away.score?home:away;
         const l=w===home?away:home;
-        scoreHTML=`<div class="score-lines">
-        ${isLive?'<div class="divider"></div>':'<div class="spacer"></div>'}
+        scoreHTML=`<div class="divider"></div>
         <div>${w.team.displayName} - ${w.score}</div>
         <div>${l.team.displayName} - ${l.score}</div>
-        <div class="spacer"></div></div>`;
+        <div class="spacer"></div>`;
     }
 
     const tableHTML=buildTable(away,home);
@@ -207,40 +197,47 @@ function renderGame(event, grid){
     grid.appendChild(gameDiv);
 }
 
-function ensureLiveSection(){
-    let lg=document.querySelector(".live-grid");
-    if(!lg){
-        const h=document.createElement("div");
-        h.className="section-title";
-        h.innerText="🔴 Live Games";
-        lg=document.createElement("div");
-        lg.className="content live-grid";
-        containerDiv.prepend(lg);
-        containerDiv.prepend(h);
-    }
-    return lg;
-}
-
 async function loadGames(){
     containerDiv.innerHTML="";
     const endpoint=leagues[currentLeague];
 
-    const res=await fetch(`https://site.api.espn.com/apis/site/v2/sports/${endpoint}/scoreboard`);
-    const data=await res.json();
+    const offsets=[0,1,-1];
+    const titles=["Today's Games","Tomorrow's Games","Yesterday's Games"];
 
-    const liveEvents=data.events.filter(e=>e.status.type.state==="in");
-    const otherEvents=data.events.filter(e=>e.status.type.state!=="in");
+    for(let i=0;i<offsets.length;i++){
+        const res=await fetch(`https://site.api.espn.com/apis/site/v2/sports/${endpoint}/scoreboard?dates=${getDate(offsets[i])}`);
+        const data=await res.json();
 
-    if(liveEvents.length){
-        const lg=ensureLiveSection();
-        liveEvents.forEach(e=>renderGame(e,lg));
-    }
+        if(!data.events?.length) continue;
 
-    if(otherEvents.length){
-        const grid=document.createElement("div");
-        grid.className="content";
-        containerDiv.appendChild(grid);
-        otherEvents.forEach(e=>renderGame(e,grid));
+        const liveEvents=data.events.filter(e=>e.status.type.state==="in");
+        const otherEvents=data.events.filter(e=>e.status.type.state!=="in");
+
+        if(offsets[i]===0 && liveEvents.length){
+            const header=document.createElement("div");
+            header.className="section-title";
+            header.innerText="🔴 Live Games";
+            containerDiv.appendChild(header);
+
+            const liveGrid=document.createElement("div");
+            liveGrid.className="content";
+            containerDiv.appendChild(liveGrid);
+
+            liveEvents.forEach(e=>renderGame(e,liveGrid));
+        }
+
+        if(otherEvents.length){
+            const title=document.createElement("div");
+            title.className="section-title";
+            title.innerText=titles[i];
+            containerDiv.appendChild(title);
+
+            const grid=document.createElement("div");
+            grid.className="content";
+            containerDiv.appendChild(grid);
+
+            otherEvents.forEach(e=>renderGame(e,grid));
+        }
     }
 }
 
