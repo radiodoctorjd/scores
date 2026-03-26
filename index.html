@@ -6,7 +6,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
 <style>
-/* (Same styles as before: header, tabs, game card, hover, live badge, scoreboard, etc.) */
 body { font-family: Arial, sans-serif; margin:0; background:#0f172a; color:white; }
 header { padding:15px; text-align:center; font-size:24px; font-weight:bold; background:#020617; }
 
@@ -69,17 +68,17 @@ const leagues = {
 };
 
 const leagueLogos={
-    NHL:"images/nhl.svg",
-    MLB:"images/mlb.svg",
-    NFL:"images/nfl.svg",
-    NBA:"images/nba.svg",
-    WNBA:"images/wnba.svg",
-    NCAAMB:"images/ncaamb.svg"
+    NHL:"images/NHL.svg",
+    MLB:"images/MLB.svg",
+    NFL:"images/NFL.svg",
+    NBA:"images/NBA.svg",
+    WNBA:"images/WNBA.svg",
+    NCAAMB:"images/NCAAMB.svg"
 };
 
 let mlbProbables = {}; // Map of ESPN date+team keys -> probable pitcher
 
-// Fetch MLB Stats API starters for today and tomorrow
+// Fetch MLB Stats API starters for today
 async function fetchMLBStarters(){
     try {
         const today = new Date();
@@ -108,7 +107,6 @@ async function fetchMLBStarters(){
     }
 }
 
-// Load MLB starters once at start and then again periodically when MLB is selected
 fetchMLBStarters();
 
 let currentLeague="NHL";
@@ -138,7 +136,7 @@ function getDate(offset){
     return `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`;
 }
 
-// Build scoreboard table (zero‑safe)
+// Build scoreboard table
 function buildTable(away, home){
     if(!away.linescores || !home.linescores) return "";
     const periods=Math.max(away.linescores.length,home.linescores.length);
@@ -148,8 +146,8 @@ function buildTable(away, home){
     header+="<th>T</th>";
 
     for(let i=0;i<periods;i++){
-        awayRow+=`<td>${away.linescores[i]?.value != null ? away.linescores[i].value : ""}</td>`;
-        homeRow+=`<td>${home.linescores[i]?.value != null ? home.linescores[i].value : ""}</td>`;
+        awayRow+=`<td>${away.linescores[i]?.value != null ? away.linescores[i].value : 0}</td>`;
+        homeRow+=`<td>${home.linescores[i]?.value != null ? home.linescores[i].value : 0}</td>`;
     }
     awayRow+=`<td class="total-cell">${away.score}</td>`;
     homeRow+=`<td class="total-cell">${home.score}</td>`;
@@ -175,11 +173,11 @@ function renderGame(event, grid){
     if(currentLeague==="MLB" && !isLive && !isFinal){
         const key=`${away.team.abbreviation}_${home.team.abbreviation}`;
         const prob=mlbProbables[key] || {};
-        if(prob.awaySP || prob.homeSP){
-            startingPitchers=`<div class="spacer"></div><div class="status">
-            Probable: ${away.team.abbreviation} ${prob.awaySP||"TBD"} vs ${home.team.abbreviation} ${prob.homeSP||"TBD"}
-            </div><div class="spacer"></div>`;
-        }
+        const awayName = prob.awaySP || "TBD";
+        const homeName = prob.homeSP || "TBD";
+        startingPitchers = `<div class="spacer"></div>
+        <div class="status">Probable: ${away.team.abbreviation} ${awayName} vs ${home.team.abbreviation} ${homeName}</div>
+        <div class="spacer"></div>`;
     }
 
     const tableHTML=buildTable(away,home);
@@ -278,9 +276,9 @@ async function loadGames(){
     }
 }
 
-// Refresh and move to LIVE
+// Refresh live games
 async function refreshLiveGames(){
-    if(currentLeague==="MLB") fetchMLBStarters(); // update starters occasionally
+    if(currentLeague==="MLB") fetchMLBStarters(); // update starters
 
     const endpoint=leagues[currentLeague];
     const res=await fetch(`https://site.api.espn.com/apis/site/v2/sports/${endpoint}/scoreboard`);
@@ -317,9 +315,11 @@ async function refreshLiveGames(){
             const tableEl=gameDiv.querySelector(".scoreboard");
             if(tableEl) gameDiv.insertBefore(scoreDiv,tableEl);
         }
+
         const tableHTML=buildTable(away,home);
         const oldTable=gameDiv.querySelector(".scoreboard");
         if(oldTable && tableHTML) oldTable.outerHTML=tableHTML;
+
         const statusDiv=gameDiv.querySelector(".status");
         statusDiv.textContent=isFinal?"Final":event.status.type.detail;
     });
