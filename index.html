@@ -36,7 +36,6 @@ header { padding:15px; text-align:center; font-size:24px; font-weight:bold; back
 .scoreboard { margin-top:8px; font-size:12px; overflow-x:auto; }
 .scoreboard table { width:100%; border-collapse:collapse; }
 .scoreboard th, .scoreboard td { padding:4px 6px; text-align:center; }
-.scoreboard th { border-bottom:1px solid #ccc; }
 .team-cell { text-align:left !important; font-weight:bold; }
 .total-cell { font-weight:bold; }
 </style>
@@ -67,34 +66,6 @@ const leagueLogos={
     NCAAMB:"images/ncaamb.svg"
 };
 
-let mlbProbables = {};
-
-// Fetch MLB starters
-async function fetchMLBStarters(){
-    try {
-        const d = new Date();
-        const dateStr = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-
-        const res = await fetch(`https://statsapi.mlb.com/api/v1/schedule?sportId=1&dates=${dateStr}&hydrate=probablePitcher`);
-        const data = await res.json();
-
-        mlbProbables = {};
-        (data.dates?.[0]?.games || []).forEach(game => {
-            const away = game.teams.away;
-            const home = game.teams.home;
-            const key = `${away.team.abbreviation}_${home.team.abbreviation}`;
-            mlbProbables[key] = {
-                awaySP: away.probablePitcher?.fullName || null,
-                homeSP: home.probablePitcher?.fullName || null
-            };
-        });
-    } catch(e){
-        mlbProbables = {};
-    }
-}
-
-fetchMLBStarters();
-
 let currentLeague="NHL";
 const tabsDiv=document.getElementById("tabs");
 const containerDiv=document.getElementById("content-container");
@@ -108,18 +79,12 @@ Object.keys(leagues).forEach(l=>{
         document.querySelectorAll(".tab").forEach(t=>t.classList.remove("active"));
         tab.classList.add("active");
         currentLeague=l;
-        if(l==="MLB") fetchMLBStarters();
         loadGames();
     };
     tabsDiv.appendChild(tab);
 });
 
-function getDate(offset){
-    const d=new Date();
-    d.setDate(d.getDate()+offset);
-    return `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`;
-}
-
+// Scoreboard builder
 function buildTable(away, home){
     if(!away.linescores || !home.linescores) return "";
     const periods=Math.max(away.linescores.length,home.linescores.length);
@@ -133,6 +98,7 @@ function buildTable(away, home){
         awayRow+=`<td>${away.linescores[i]?.value ?? 0}</td>`;
         homeRow+=`<td>${home.linescores[i]?.value ?? 0}</td>`;
     }
+
     awayRow+=`<td class="total-cell">${away.score}</td>`;
     homeRow+=`<td class="total-cell">${home.score}</td>`;
 
@@ -144,6 +110,7 @@ function buildTable(away, home){
     </tbody></table></div>`;
 }
 
+// Render game
 function renderGame(event, grid){
     const comp=event.competitions[0];
     const home=comp.competitors.find(t=>t.homeAway==="home");
@@ -153,15 +120,6 @@ function renderGame(event, grid){
     const isFinal=event.status.type.completed;
 
     const statusText=isFinal?"Final":(isLive?event.status.type.detail:new Date(event.date).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}));
-
-    let startingPitchers="";
-    if(currentLeague==="MLB" && !isLive && !isFinal){
-        const key=`${away.team.abbreviation}_${home.team.abbreviation}`;
-        const prob=mlbProbables[key] || {};
-        startingPitchers=`<div class="spacer"></div>
-        <div class="status">Probable: ${away.team.abbreviation} ${prob.awaySP || "TBD"} vs ${home.team.abbreviation} ${prob.homeSP || "TBD"}</div>
-        <div class="spacer"></div>`;
-    }
 
     let scoreHTML="";
     if(isLive||isFinal){
@@ -175,8 +133,14 @@ function renderGame(event, grid){
 
     const tableHTML=buildTable(away,home);
 
+    let broadcast="";
+    if(!isFinal && comp.broadcasts?.length){
+        broadcast = comp.broadcasts.map(b=>b.names).join(", ");
+    }
+
     const gameDiv=document.createElement("div");
     gameDiv.className="game";
+    gameDiv.dataset.id=event.id;
 
     gameDiv.innerHTML=`
     <div class="team-line">
@@ -186,64 +150,71 @@ function renderGame(event, grid){
     </div>
 
     <div class="spacer"></div>
-    ${startingPitchers}
     ${scoreHTML}
     ${tableHTML}
-    ${tableHTML?'<div class="spacer"></div><div class="spacer"></div>':''}
 
+    <div class="spacer"></div>
     <div class="status">${statusText}</div>
+    ${broadcast ? `<div class="status"><small>Watch: ${broadcast}</small></div>` : ""}
     `;
 
     grid.appendChild(gameDiv);
 }
 
+// Initial load
 async function loadGames(){
     containerDiv.innerHTML="";
-    const endpoint=leagues[currentLeague];
+    const res=await fetch(`https://site.api.espn.com/apis/site/v2/sports/${leagues[currentLeague]}/scoreboard`);
+    const data=await res.json();
 
-    const offsets=[0,1,-1];
-    const titles=["Today's Games","Tomorrow's Games","Yesterday's Games"];
+    const grid=document.createElement("div");
+    grid.className="content";
+    containerDiv.appendChild(grid);
 
-    for(let i=0;i<offsets.length;i++){
-        const res=await fetch(`https://site.api.espn.com/apis/site/v2/sports/${endpoint}/scoreboard?dates=${getDate(offsets[i])}`);
-        const data=await res.json();
-
-        if(!data.events?.length) continue;
-
-        const liveEvents=data.events.filter(e=>e.status.type.state==="in");
-        const otherEvents=data.events.filter(e=>e.status.type.state!=="in");
-
-        if(offsets[i]===0 && liveEvents.length){
-            const header=document.createElement("div");
-            header.className="section-title";
-            header.innerText="🔴 Live Games";
-            containerDiv.appendChild(header);
-
-            const liveGrid=document.createElement("div");
-            liveGrid.className="content";
-            containerDiv.appendChild(liveGrid);
-
-            liveEvents.forEach(e=>renderGame(e,liveGrid));
-        }
-
-        if(otherEvents.length){
-            const title=document.createElement("div");
-            title.className="section-title";
-            title.innerText=titles[i];
-            containerDiv.appendChild(title);
-
-            const grid=document.createElement("div");
-            grid.className="content";
-            containerDiv.appendChild(grid);
-
-            otherEvents.forEach(e=>renderGame(e,grid));
-        }
-    }
+    data.events.forEach(e=>renderGame(e,grid));
 }
 
+// 🔄 UPDATE ONLY LIVE DATA
 async function refreshLiveGames(){
-    if(currentLeague==="MLB") fetchMLBStarters();
-    loadGames();
+    const res=await fetch(`https://site.api.espn.com/apis/site/v2/sports/${leagues[currentLeague]}/scoreboard`);
+    const data=await res.json();
+
+    data.events.forEach(event=>{
+        const card=document.querySelector(`[data-id="${event.id}"]`);
+        if(!card) return;
+
+        const comp=event.competitions[0];
+        const home=comp.competitors.find(t=>t.homeAway==="home");
+        const away=comp.competitors.find(t=>t.homeAway==="away");
+
+        const isLive=event.status.type.state==="in";
+        const isFinal=event.status.type.completed;
+
+        const statusDiv=card.querySelector(".status");
+        statusDiv.textContent=isFinal?"Final":event.status.type.detail;
+
+        // update score
+        card.querySelectorAll(".divider, .score-lines").forEach(e=>e.remove());
+
+        if(isLive||isFinal){
+            const w=home.score>=away.score?home:away;
+            const l=w===home?away:home;
+
+            const scoreBlock=document.createElement("div");
+            scoreBlock.innerHTML=`
+            <div class="divider"></div>
+            <div>${w.team.displayName} - ${w.score}</div>
+            <div>${l.team.displayName} - ${l.score}</div>
+            <div class="spacer"></div>`;
+
+            card.insertBefore(scoreBlock, card.querySelector(".scoreboard"));
+        }
+
+        // update table
+        const tableHTML=buildTable(away,home);
+        const oldTable=card.querySelector(".scoreboard");
+        if(oldTable && tableHTML) oldTable.outerHTML=tableHTML;
+    });
 }
 
 loadGames();
