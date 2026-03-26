@@ -68,27 +68,23 @@ const leagues = {
 };
 
 const leagueLogos={
-    NHL:"images/NHL.svg",
-    MLB:"images/MLB.svg",
-    NFL:"images/NFL.svg",
-    NBA:"images/NBA.svg",
-    WNBA:"images/WNBA.svg",
-    NCAAMB:"images/NCAAMB.svg"
+    NHL:"images/nhl.svg",
+    MLB:"images/mlb.svg",
+    NFL:"images/nfl.svg",
+    NBA:"images/nba.svg",
+    WNBA:"images/wnba.svg",
+    NCAAMB:"images/ncaamb.svg"
 };
 
-let mlbProbables = {}; // Map of ESPN date+team keys -> probable pitcher
+let mlbProbables = {};
 
-// Fetch MLB Stats API starters for today
+// Fetch MLB starters
 async function fetchMLBStarters(){
     try {
-        const today = new Date();
-        const y = today.getFullYear();
-        const m = String(today.getMonth()+1).padStart(2,'0');
-        const d = String(today.getDate()).padStart(2,'0');
-        const dateStr = `${y}-${m}-${d}`;
+        const d = new Date();
+        const dateStr = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 
-        const statsUrl = `https://statsapi.mlb.com/api/v1/schedule?sportId=1&dates=${dateStr}&hydrate=probablePitcher`;
-        const res = await fetch(statsUrl);
+        const res = await fetch(`https://statsapi.mlb.com/api/v1/schedule?sportId=1&dates=${dateStr}&hydrate=probablePitcher`);
         const data = await res.json();
 
         mlbProbables = {};
@@ -102,7 +98,6 @@ async function fetchMLBStarters(){
             };
         });
     } catch(e){
-        console.warn("MLB starters load failed", e);
         mlbProbables = {};
     }
 }
@@ -112,10 +107,9 @@ fetchMLBStarters();
 let currentLeague="NHL";
 const tabsDiv=document.getElementById("tabs");
 const containerDiv=document.getElementById("content-container");
-let liveGamesMap={};
 
-// Create tabs
-Object.keys(leagues).forEach(l => {
+// Tabs
+Object.keys(leagues).forEach(l=>{
     const tab=document.createElement("div");
     tab.className="tab"+(l===currentLeague?" active":"");
     tab.innerHTML=`<img src="${leagueLogos[l]}">${l}`;
@@ -129,35 +123,36 @@ Object.keys(leagues).forEach(l => {
     tabsDiv.appendChild(tab);
 });
 
-// Local date helper
 function getDate(offset){
-    const d = new Date();
+    const d=new Date();
     d.setDate(d.getDate()+offset);
     return `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`;
 }
 
-// Build scoreboard table
 function buildTable(away, home){
     if(!away.linescores || !home.linescores) return "";
     const periods=Math.max(away.linescores.length,home.linescores.length);
-    let header="", awayRow="", homeRow="";
 
+    let header="";
     for(let i=1;i<=periods;i++) header+=`<th>${i}</th>`;
     header+="<th>T</th>";
 
+    let awayRow="", homeRow="";
     for(let i=0;i<periods;i++){
-        awayRow+=`<td>${away.linescores[i]?.value != null ? away.linescores[i].value : 0}</td>`;
-        homeRow+=`<td>${home.linescores[i]?.value != null ? home.linescores[i].value : 0}</td>`;
+        awayRow+=`<td>${away.linescores[i]?.value ?? 0}</td>`;
+        homeRow+=`<td>${home.linescores[i]?.value ?? 0}</td>`;
     }
     awayRow+=`<td class="total-cell">${away.score}</td>`;
     homeRow+=`<td class="total-cell">${home.score}</td>`;
 
-    return `<div class="scoreboard"><table><thead><tr><th></th>${header}</tr></thead>
-    <tbody><tr><td class="team-cell">${away.team.abbreviation}</td>${awayRow}</tr>
-    <tr><td class="team-cell">${home.team.abbreviation}</td>${homeRow}</tr></tbody></table></div>`;
+    return `<div class="scoreboard"><table>
+    <thead><tr><th></th>${header}</tr></thead>
+    <tbody>
+    <tr><td class="team-cell">${away.team.abbreviation}</td>${awayRow}</tr>
+    <tr><td class="team-cell">${home.team.abbreviation}</td>${homeRow}</tr>
+    </tbody></table></div>`;
 }
 
-// Create and populate game cards
 function renderGame(event, grid){
     const comp=event.competitions[0];
     const home=comp.competitors.find(t=>t.homeAway==="home");
@@ -168,41 +163,34 @@ function renderGame(event, grid){
 
     const statusText=isFinal?"Final":(isLive?event.status.type.detail:new Date(event.date).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}));
 
-    // MLB probable starters
     let startingPitchers="";
     if(currentLeague==="MLB" && !isLive && !isFinal){
         const key=`${away.team.abbreviation}_${home.team.abbreviation}`;
         const prob=mlbProbables[key] || {};
-        const awayName = prob.awaySP || "TBD";
-        const homeName = prob.homeSP || "TBD";
-        startingPitchers = `<div class="spacer"></div>
-        <div class="status">Probable: ${away.team.abbreviation} ${awayName} vs ${home.team.abbreviation} ${homeName}</div>
+        startingPitchers=`<div class="spacer"></div>
+        <div class="status">Probable: ${away.team.abbreviation} ${prob.awaySP || "TBD"} vs ${home.team.abbreviation} ${prob.homeSP || "TBD"}</div>
         <div class="spacer"></div>`;
     }
-
-    const tableHTML=buildTable(away,home);
 
     let scoreHTML="";
     if(isLive||isFinal){
         const w=home.score>=away.score?home:away;
         const l=w===home?away:home;
         scoreHTML=`<div class="score-lines">
-            ${isLive?'<div class="divider"></div>':'<div class="spacer"></div>'}
-            <div>${w.team.displayName} - ${w.score}</div>
-            <div>${l.team.displayName} - ${l.score}</div>
-            <div class="spacer"></div>
-        </div>`;
+        ${isLive?'<div class="divider"></div>':'<div class="spacer"></div>'}
+        <div>${w.team.displayName} - ${w.score}</div>
+        <div>${l.team.displayName} - ${l.score}</div>
+        <div class="spacer"></div></div>`;
     }
 
-    let broadcast="";
-    if(!isFinal && comp.broadcasts?.length) broadcast=comp.broadcasts.map(b=>b.names).join(", ");
+    const tableHTML=buildTable(away,home);
 
     const gameDiv=document.createElement("div");
     gameDiv.className="game";
-    gameDiv.dataset.eventId=event.id;
 
     gameDiv.innerHTML=`
-    <div class="team-line">${isLive?'<span class="live-badge">LIVE</span>':''}
+    <div class="team-line">
+    ${isLive?'<span class="live-badge">LIVE</span>':''}
     <img src="${away.team.logo}">${away.team.abbreviation} @ 
     <img src="${home.team.logo}">${home.team.abbreviation}
     </div>
@@ -214,15 +202,11 @@ function renderGame(event, grid){
     ${tableHTML?'<div class="spacer"></div><div class="spacer"></div>':''}
 
     <div class="status">${statusText}</div>
-    ${isLive?'<div class="divider"></div>':''}
-    ${broadcast ? `<div class="status"><small>Watch: ${broadcast}</small></div>` : ""}
     `;
 
     grid.appendChild(gameDiv);
-    if(isLive) liveGamesMap[event.id]=gameDiv;
 }
 
-// Ensure live section
 function ensureLiveSection(){
     let lg=document.querySelector(".live-grid");
     if(!lg){
@@ -237,92 +221,32 @@ function ensureLiveSection(){
     return lg;
 }
 
-// Load and display games
 async function loadGames(){
     containerDiv.innerHTML="";
-    liveGamesMap={};
-
     const endpoint=leagues[currentLeague];
-    const offsets=[0,1,-1];
-    const titles=["Today's Games","Tomorrow's Games","Yesterday's Games"];
 
-    for(let i=0;i<offsets.length;i++){
-        const res=await fetch(`https://site.api.espn.com/apis/site/v2/sports/${endpoint}/scoreboard?dates=${getDate(offsets[i])}`);
-        const data=await res.json();
-
-        if(!data.events?.length) continue;
-
-        const liveEvents=data.events.filter(e=>e.status.type.state==="in");
-        const nonLiveEvents=data.events.filter(e=>e.status.type.state!=="in");
-
-        if(offsets[i]===0 && liveEvents.length){
-            const lg=ensureLiveSection();
-            liveEvents.forEach(e=>renderGame(e,lg));
-        }
-
-        if(nonLiveEvents.length){
-            const title=document.createElement("div");
-            title.className="section-title";
-            title.innerText=titles[i];
-            containerDiv.appendChild(title);
-
-            const grid=document.createElement("div");
-            grid.className="content";
-            containerDiv.appendChild(grid);
-
-            nonLiveEvents.sort((a,b)=>new Date(a.date)-new Date(b.date));
-            nonLiveEvents.forEach(e=>renderGame(e,grid));
-        }
-    }
-}
-
-// Refresh live games
-async function refreshLiveGames(){
-    if(currentLeague==="MLB") fetchMLBStarters(); // update starters
-
-    const endpoint=leagues[currentLeague];
     const res=await fetch(`https://site.api.espn.com/apis/site/v2/sports/${endpoint}/scoreboard`);
     const data=await res.json();
 
-    data.events.forEach(event=>{
-        const comp=event.competitions[0];
-        const home=comp.competitors.find(t=>t.homeAway==="home");
-        const away=comp.competitors.find(t=>t.homeAway==="away");
+    const liveEvents=data.events.filter(e=>e.status.type.state==="in");
+    const otherEvents=data.events.filter(e=>e.status.type.state!=="in");
 
-        const isLive=event.status.type.state==="in";
-        const isFinal=event.status.type.completed;
+    if(liveEvents.length){
+        const lg=ensureLiveSection();
+        liveEvents.forEach(e=>renderGame(e,lg));
+    }
 
-        const gameDiv=document.querySelector(`[data-event-id="${event.id}"]`);
-        if(isLive && gameDiv && !gameDiv.closest(".live-grid")){
-            const lg=ensureLiveSection();
-            gameDiv.classList.add("live-animate");
-            lg.prepend(gameDiv);
-            setTimeout(()=>gameDiv.classList.remove("live-animate"),700);
-        }
-        if(!gameDiv) return;
+    if(otherEvents.length){
+        const grid=document.createElement("div");
+        grid.className="content";
+        containerDiv.appendChild(grid);
+        otherEvents.forEach(e=>renderGame(e,grid));
+    }
+}
 
-        gameDiv.querySelectorAll(".score-lines").forEach(el=>el.remove());
-        if(isLive||isFinal){
-            const w=home.score>=away.score?home:away;
-            const l=w===home?away:home;
-            const scoreDiv=document.createElement("div");
-            scoreDiv.className="score-lines";
-            scoreDiv.innerHTML=`
-            <div class="divider"></div>
-            <div>${w.team.displayName} - ${w.score}</div>
-            <div>${l.team.displayName} - ${l.score}</div>
-            <div class="spacer"></div>`;
-            const tableEl=gameDiv.querySelector(".scoreboard");
-            if(tableEl) gameDiv.insertBefore(scoreDiv,tableEl);
-        }
-
-        const tableHTML=buildTable(away,home);
-        const oldTable=gameDiv.querySelector(".scoreboard");
-        if(oldTable && tableHTML) oldTable.outerHTML=tableHTML;
-
-        const statusDiv=gameDiv.querySelector(".status");
-        statusDiv.textContent=isFinal?"Final":event.status.type.detail;
-    });
+async function refreshLiveGames(){
+    if(currentLeague==="MLB") fetchMLBStarters();
+    loadGames();
 }
 
 loadGames();
