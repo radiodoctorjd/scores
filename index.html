@@ -18,7 +18,7 @@ header { padding:15px; text-align:center; font-size:24px; font-weight:bold; back
 
 .content { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; padding:20px; }
 @media(max-width:1024px){ .content { grid-template-columns:repeat(2,1fr); } }
-@media(max-width:800px){ .content { grid-template-columns:1fr !important; } }
+@media(max-width:800px){ .content { grid-template-columns:1fr; } }
 
 .game { background:white; color:black; padding:12px; border-radius:10px; }
 
@@ -29,12 +29,24 @@ header { padding:15px; text-align:center; font-size:24px; font-weight:bold; back
 .divider { border-top:1px solid #ddd; margin:6px 0; }
 
 .status { font-size:14px; color:#333; }
+.status small { font-size:12px; }
 
-.live-badge { background:red; color:white; font-size:11px; padding:2px 6px; border-radius:10px; margin-right:6px; }
+@keyframes pulse {0%{transform:scale(1);}50%{transform:scale(1.2);}100%{transform:scale(1);}}
+.live-badge { background:red; color:white; font-size:11px; padding:2px 6px; border-radius:10px; margin-right:6px; animation:pulse 1s infinite; }
+
+/* Live animation */
+@keyframes liveEnter {
+    0% { opacity:0; transform:translateY(10px); box-shadow:0 0 0 rgba(255,0,0,0); }
+    50% { opacity:1; transform:translateY(0); box-shadow:0 0 12px rgba(255,0,0,0.6); }
+    100% { opacity:1; transform:translateY(0); box-shadow:none; }
+}
+.live-animate { animation: liveEnter 0.6s ease-out; }
 
 .scoreboard { margin-top:8px; font-size:12px; overflow-x:auto; }
 .scoreboard table { width:100%; border-collapse:collapse; }
 .scoreboard th, .scoreboard td { padding:4px 6px; text-align:center; }
+.scoreboard th { border-bottom:1px solid #ccc; }
+.scoreboard td { border-bottom:1px solid #eee; }
 .team-cell { text-align:left !important; font-weight:bold; }
 .total-cell { font-weight:bold; }
 </style>
@@ -47,7 +59,7 @@ header { padding:15px; text-align:center; font-size:24px; font-weight:bold; back
 <div id="content-container"></div>
 
 <script>
-const leagues = {
+const leagues={
     NHL:"hockey/nhl",
     MLB:"baseball/mlb",
     NFL:"football/nfl",
@@ -68,6 +80,7 @@ const leagueLogos={
 let currentLeague="NHL";
 const tabsDiv=document.getElementById("tabs");
 const containerDiv=document.getElementById("content-container");
+let liveGamesMap={};
 
 // Tabs
 Object.keys(leagues).forEach(l=>{
@@ -83,6 +96,13 @@ Object.keys(leagues).forEach(l=>{
     tabsDiv.appendChild(tab);
 });
 
+// Local date
+function getDate(offset){
+    const d=new Date();
+    d.setDate(d.getDate()+offset);
+    return `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`;
+}
+
 // Scoreboard
 function buildTable(away, home){
     if(!away.linescores || !home.linescores) return "";
@@ -92,13 +112,12 @@ function buildTable(away, home){
     for(let i=1;i<=periods;i++) header+=`<th>${i}</th>`;
     header+="<th>T</th>";
 
-    let awayRow="", homeRow="";
-    for(let i=0;i<periods;i++){
-        awayRow+=`<td>${away.linescores[i]?.value ?? 0}</td>`;
-        homeRow+=`<td>${home.linescores[i]?.value ?? 0}</td>`;
-    }
-
+    let awayRow="";
+    for(let i=0;i<periods;i++) awayRow+=`<td>${away.linescores[i]?.value != null ? away.linescores[i].value : ""}</td>`;
     awayRow+=`<td class="total-cell">${away.score}</td>`;
+
+    let homeRow="";
+    for(let i=0;i<periods;i++) homeRow+=`<td>${home.linescores[i]?.value != null ? home.linescores[i].value : ""}</td>`;
     homeRow+=`<td class="total-cell">${home.score}</td>`;
 
     return `<div class="scoreboard"><table>
@@ -124,22 +143,23 @@ function renderGame(event, grid){
     if(isLive||isFinal){
         const w=home.score>=away.score?home:away;
         const l=w===home?away:home;
-        scoreHTML=`<div class="divider"></div>
+        scoreHTML=`<div class="score-lines">
+        ${isLive?'<div class="divider"></div>':'<div class="spacer"></div>'}
         <div>${w.team.displayName} - ${w.score}</div>
         <div>${l.team.displayName} - ${l.score}</div>
-        <div class="spacer"></div>`;
+        <div class="spacer"></div></div>`;
     }
 
     const tableHTML=buildTable(away,home);
 
     let broadcast="";
     if(!isFinal && comp.broadcasts?.length){
-        broadcast = comp.broadcasts.map(b=>b.names).join(", ");
+        broadcast=comp.broadcasts.map(b=>b.names).join(", ");
     }
 
     const gameDiv=document.createElement("div");
     gameDiv.className="game";
-    gameDiv.dataset.id=event.id;
+    gameDiv.dataset.eventId=event.id;
 
     gameDiv.innerHTML=`
     <div class="team-line">
@@ -151,37 +171,83 @@ function renderGame(event, grid){
     <div class="spacer"></div>
     ${scoreHTML}
     ${tableHTML}
+    ${tableHTML?'<div class="spacer"></div><div class="spacer"></div>':''}
 
-    <div class="spacer"></div>
     <div class="status">${statusText}</div>
+    ${isLive?'<div class="divider"></div>':''}
+
     ${broadcast ? `<div class="status"><small>Watch: ${broadcast}</small></div>` : ""}
     `;
 
     grid.appendChild(gameDiv);
+    if(isLive) liveGamesMap[event.id]=gameDiv;
+}
+
+// Ensure live section
+function ensureLiveSection(){
+    let liveGrid=document.querySelector(".live-grid");
+    if(!liveGrid){
+        const header=document.createElement("div");
+        header.className="section-title";
+        header.innerText="🔴 Live Games";
+
+        liveGrid=document.createElement("div");
+        liveGrid.className="content live-grid";
+
+        containerDiv.prepend(liveGrid);
+        containerDiv.prepend(header);
+    }
+    return liveGrid;
 }
 
 // Load games
 async function loadGames(){
     containerDiv.innerHTML="";
-    const res=await fetch(`https://site.api.espn.com/apis/site/v2/sports/${leagues[currentLeague]}/scoreboard`);
-    const data=await res.json();
+    liveGamesMap={};
 
-    const grid=document.createElement("div");
-    grid.className="content";
-    containerDiv.appendChild(grid);
+    const endpoint=leagues[currentLeague];
+    const offsets=[0,1,-1];
+    const titles=["Today's Games","Tomorrow's Games","Yesterday's Games"];
 
-    data.events.forEach(e=>renderGame(e,grid));
+    for(let i=0;i<offsets.length;i++){
+        const res=await fetch(`https://site.api.espn.com/apis/site/v2/sports/${endpoint}/scoreboard?dates=${getDate(offsets[i])}`);
+        const data=await res.json();
+
+        if(!data.events?.length) continue;
+
+        const liveEvents=data.events.filter(e=>e.status.type.state==="in");
+        const nonLiveEvents=data.events.filter(e=>e.status.type.state!=="in");
+
+        // Live section
+        if(offsets[i]===0 && liveEvents.length){
+            const liveGrid=ensureLiveSection();
+            liveEvents.forEach(e=>renderGame(e,liveGrid));
+        }
+
+        // Other games
+        if(nonLiveEvents.length){
+            const title=document.createElement("div");
+            title.className="section-title";
+            title.innerText=titles[i];
+            containerDiv.appendChild(title);
+
+            const grid=document.createElement("div");
+            grid.className="content";
+            containerDiv.appendChild(grid);
+
+            nonLiveEvents.sort((a,b)=>new Date(a.date)-new Date(b.date));
+            nonLiveEvents.forEach(e=>renderGame(e,grid));
+        }
+    }
 }
 
-// Refresh live only
+// Refresh + move to LIVE
 async function refreshLiveGames(){
-    const res=await fetch(`https://site.api.espn.com/apis/site/v2/sports/${leagues[currentLeague]}/scoreboard`);
+    const endpoint=leagues[currentLeague];
+    const res=await fetch(`https://site.api.espn.com/apis/site/v2/sports/${endpoint}/scoreboard`);
     const data=await res.json();
 
     data.events.forEach(event=>{
-        const card=document.querySelector(`[data-id="${event.id}"]`);
-        if(!card) return;
-
         const comp=event.competitions[0];
         const home=comp.competitors.find(t=>t.homeAway==="home");
         const away=comp.competitors.find(t=>t.homeAway==="away");
@@ -189,28 +255,44 @@ async function refreshLiveGames(){
         const isLive=event.status.type.state==="in";
         const isFinal=event.status.type.completed;
 
-        const statusDiv=card.querySelector(".status");
-        statusDiv.textContent=isFinal?"Final":event.status.type.detail;
+        let gameDiv=document.querySelector(`[data-event-id="${event.id}"]`);
 
-        card.querySelectorAll(".divider").forEach(e=>e.remove());
+        // Move to LIVE with animation
+        if(isLive && gameDiv && !gameDiv.closest(".live-grid")){
+            const liveGrid=ensureLiveSection();
+
+            gameDiv.classList.add("live-animate");
+            liveGrid.prepend(gameDiv);
+
+            setTimeout(()=>gameDiv.classList.remove("live-animate"),700);
+        }
+
+        if(!gameDiv) return;
+
+        gameDiv.querySelectorAll(".score-lines").forEach(el=>el.remove());
 
         if(isLive||isFinal){
             const w=home.score>=away.score?home:away;
             const l=w===home?away:home;
 
-            const scoreBlock=document.createElement("div");
-            scoreBlock.innerHTML=`
+            const scoreDiv=document.createElement("div");
+            scoreDiv.className="score-lines";
+            scoreDiv.innerHTML=`
             <div class="divider"></div>
             <div>${w.team.displayName} - ${w.score}</div>
             <div>${l.team.displayName} - ${l.score}</div>
             <div class="spacer"></div>`;
 
-            card.insertBefore(scoreBlock, card.querySelector(".scoreboard"));
+            const tableEl=gameDiv.querySelector(".scoreboard");
+            if(tableEl) gameDiv.insertBefore(scoreDiv,tableEl);
         }
 
         const tableHTML=buildTable(away,home);
-        const oldTable=card.querySelector(".scoreboard");
+        const oldTable=gameDiv.querySelector(".scoreboard");
         if(oldTable && tableHTML) oldTable.outerHTML=tableHTML;
+
+        const statusDiv=gameDiv.querySelector(".status");
+        statusDiv.textContent=isFinal?"Final":event.status.type.detail;
     });
 }
 
