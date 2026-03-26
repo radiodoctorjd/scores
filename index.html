@@ -20,8 +20,7 @@ header { padding:15px; text-align:center; font-size:24px; font-weight:bold; back
 @media(max-width:1024px){ .content { grid-template-columns:repeat(2,1fr); } }
 @media(max-width:800px){ .content { grid-template-columns:1fr !important; } }
 
-.game { background:white; color:black; padding:12px; border-radius:10px; transition: transform 0.2s ease, box-shadow 0.2s ease; }
-.game:hover { transform: scale(1.02); box-shadow: 0 6px 16px rgba(0,0,0,0.25); }
+.game { background:white; color:black; padding:12px; border-radius:10px; }
 
 .team-line { display:flex; align-items:center; gap:8px; font-weight:bold; }
 .team-line img { width:26px; }
@@ -84,7 +83,7 @@ Object.keys(leagues).forEach(l=>{
     tabsDiv.appendChild(tab);
 });
 
-// Scoreboard builder
+// Scoreboard
 function buildTable(away, home){
     if(!away.linescores || !home.linescores) return "";
     const periods=Math.max(away.linescores.length,home.linescores.length);
@@ -161,7 +160,7 @@ function renderGame(event, grid){
     grid.appendChild(gameDiv);
 }
 
-// Initial load
+// Load games
 async function loadGames(){
     containerDiv.innerHTML="";
     const res=await fetch(`https://site.api.espn.com/apis/site/v2/sports/${leagues[currentLeague]}/scoreboard`);
@@ -174,7 +173,7 @@ async function loadGames(){
     data.events.forEach(e=>renderGame(e,grid));
 }
 
-// 🔄 UPDATE ONLY LIVE DATA
+// Refresh live only
 async function refreshLiveGames(){
     const res=await fetch(`https://site.api.espn.com/apis/site/v2/sports/${leagues[currentLeague]}/scoreboard`);
     const data=await res.json();
@@ -193,8 +192,7 @@ async function refreshLiveGames(){
         const statusDiv=card.querySelector(".status");
         statusDiv.textContent=isFinal?"Final":event.status.type.detail;
 
-        // update score
-        card.querySelectorAll(".divider, .score-lines").forEach(e=>e.remove());
+        card.querySelectorAll(".divider").forEach(e=>e.remove());
 
         if(isLive||isFinal){
             const w=home.score>=away.score?home:away;
@@ -210,7 +208,6 @@ async function refreshLiveGames(){
             card.insertBefore(scoreBlock, card.querySelector(".scoreboard"));
         }
 
-        // update table
         const tableHTML=buildTable(away,home);
         const oldTable=card.querySelector(".scoreboard");
         if(oldTable && tableHTML) oldTable.outerHTML=tableHTML;
