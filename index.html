@@ -6,6 +6,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
 <style>
+/* (Same styles as before: header, tabs, game card, hover, live badge, scoreboard, etc.) */
 body { font-family: Arial, sans-serif; margin:0; background:#0f172a; color:white; }
 header { padding:15px; text-align:center; font-size:24px; font-weight:bold; background:#020617; }
 
@@ -15,16 +16,12 @@ header { padding:15px; text-align:center; font-size:24px; font-weight:bold; back
 .tab.active { border-bottom:3px solid #38bdf8; background:#0f172a; }
 
 .section-title { text-align:center; font-weight:bold; margin:10px 0; }
-
 .content { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; padding:20px; }
 @media(max-width:1024px){ .content { grid-template-columns:repeat(2,1fr); } }
 @media(max-width:800px){ .content { grid-template-columns:1fr; } }
 
 .game { background:white; color:black; padding:12px; border-radius:10px; transition: transform 0.2s ease, box-shadow 0.2s ease; }
-.game:hover { 
-    transform: scale(1.02); 
-    box-shadow: 0 6px 16px rgba(0,0,0,0.25); 
-}
+.game:hover { transform: scale(1.02); box-shadow: 0 6px 16px rgba(0,0,0,0.25); }
 
 .team-line { display:flex; align-items:center; gap:8px; font-weight:bold; }
 .team-line img { width:26px; }
@@ -62,7 +59,7 @@ header { padding:15px; text-align:center; font-size:24px; font-weight:bold; back
 <div id="content-container"></div>
 
 <script>
-const leagues={
+const leagues = {
     NHL:"hockey/nhl",
     MLB:"baseball/mlb",
     NFL:"football/nfl",
@@ -80,13 +77,47 @@ const leagueLogos={
     NCAAMB:"images/ncaamb.svg"
 };
 
+let mlbProbables = {}; // Map of ESPN date+team keys -> probable pitcher
+
+// Fetch MLB Stats API starters for today and tomorrow
+async function fetchMLBStarters(){
+    try {
+        const today = new Date();
+        const y = today.getFullYear();
+        const m = String(today.getMonth()+1).padStart(2,'0');
+        const d = String(today.getDate()).padStart(2,'0');
+        const dateStr = `${y}-${m}-${d}`;
+
+        const statsUrl = `https://statsapi.mlb.com/api/v1/schedule?sportId=1&dates=${dateStr}&hydrate=probablePitcher`;
+        const res = await fetch(statsUrl);
+        const data = await res.json();
+
+        mlbProbables = {};
+        (data.dates?.[0]?.games || []).forEach(game => {
+            const away = game.teams.away;
+            const home = game.teams.home;
+            const key = `${away.team.abbreviation}_${home.team.abbreviation}`;
+            mlbProbables[key] = {
+                awaySP: away.probablePitcher?.fullName || null,
+                homeSP: home.probablePitcher?.fullName || null
+            };
+        });
+    } catch(e){
+        console.warn("MLB starters load failed", e);
+        mlbProbables = {};
+    }
+}
+
+// Load MLB starters once at start and then again periodically when MLB is selected
+fetchMLBStarters();
+
 let currentLeague="NHL";
 const tabsDiv=document.getElementById("tabs");
 const containerDiv=document.getElementById("content-container");
 let liveGamesMap={};
 
-// Tabs
-Object.keys(leagues).forEach(l=>{
+// Create tabs
+Object.keys(leagues).forEach(l => {
     const tab=document.createElement("div");
     tab.className="tab"+(l===currentLeague?" active":"");
     tab.innerHTML=`<img src="${leagueLogos[l]}">${l}`;
@@ -94,44 +125,41 @@ Object.keys(leagues).forEach(l=>{
         document.querySelectorAll(".tab").forEach(t=>t.classList.remove("active"));
         tab.classList.add("active");
         currentLeague=l;
+        if(l==="MLB") fetchMLBStarters();
         loadGames();
     };
     tabsDiv.appendChild(tab);
 });
 
-// Local date
+// Local date helper
 function getDate(offset){
-    const d=new Date();
+    const d = new Date();
     d.setDate(d.getDate()+offset);
     return `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`;
 }
 
-// Scoreboard
+// Build scoreboard table (zero‑safe)
 function buildTable(away, home){
     if(!away.linescores || !home.linescores) return "";
     const periods=Math.max(away.linescores.length,home.linescores.length);
+    let header="", awayRow="", homeRow="";
 
-    let header="";
     for(let i=1;i<=periods;i++) header+=`<th>${i}</th>`;
     header+="<th>T</th>";
 
-    let awayRow="";
-    for(let i=0;i<periods;i++) awayRow+=`<td>${away.linescores[i]?.value != null ? away.linescores[i].value : ""}</td>`;
+    for(let i=0;i<periods;i++){
+        awayRow+=`<td>${away.linescores[i]?.value != null ? away.linescores[i].value : ""}</td>`;
+        homeRow+=`<td>${home.linescores[i]?.value != null ? home.linescores[i].value : ""}</td>`;
+    }
     awayRow+=`<td class="total-cell">${away.score}</td>`;
-
-    let homeRow="";
-    for(let i=0;i<periods;i++) homeRow+=`<td>${home.linescores[i]?.value != null ? home.linescores[i].value : ""}</td>`;
     homeRow+=`<td class="total-cell">${home.score}</td>`;
 
-    return `<div class="scoreboard"><table>
-    <thead><tr><th></th>${header}</tr></thead>
-    <tbody>
-    <tr><td class="team-cell">${away.team.abbreviation}</td>${awayRow}</tr>
-    <tr><td class="team-cell">${home.team.abbreviation}</td>${homeRow}</tr>
-    </tbody></table></div>`;
+    return `<div class="scoreboard"><table><thead><tr><th></th>${header}</tr></thead>
+    <tbody><tr><td class="team-cell">${away.team.abbreviation}</td>${awayRow}</tr>
+    <tr><td class="team-cell">${home.team.abbreviation}</td>${homeRow}</tr></tbody></table></div>`;
 }
 
-// Render game
+// Create and populate game cards
 function renderGame(event, grid){
     const comp=event.competitions[0];
     const home=comp.competitors.find(t=>t.homeAway==="home");
@@ -142,40 +170,41 @@ function renderGame(event, grid){
 
     const statusText=isFinal?"Final":(isLive?event.status.type.detail:new Date(event.date).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}));
 
-    // Starting pitchers for MLB upcoming games
-    let startingPitchers = "";
-    if(currentLeague === "MLB" && !isLive && !isFinal){
-        const homeSP = comp.competitors.find(t=>t.homeAway==="home")?.startingPitcher || "TBD";
-        const awaySP = comp.competitors.find(t=>t.homeAway==="away")?.startingPitcher || "TBD";
-        startingPitchers = `<div class="spacer"></div>
-        <div class="status">Probable Starters: ${away.team.abbreviation} ${awaySP} vs ${home.team.abbreviation} ${homeSP}</div>`;
+    // MLB probable starters
+    let startingPitchers="";
+    if(currentLeague==="MLB" && !isLive && !isFinal){
+        const key=`${away.team.abbreviation}_${home.team.abbreviation}`;
+        const prob=mlbProbables[key] || {};
+        if(prob.awaySP || prob.homeSP){
+            startingPitchers=`<div class="spacer"></div><div class="status">
+            Probable: ${away.team.abbreviation} ${prob.awaySP||"TBD"} vs ${home.team.abbreviation} ${prob.homeSP||"TBD"}
+            </div><div class="spacer"></div>`;
+        }
     }
+
+    const tableHTML=buildTable(away,home);
 
     let scoreHTML="";
     if(isLive||isFinal){
         const w=home.score>=away.score?home:away;
         const l=w===home?away:home;
         scoreHTML=`<div class="score-lines">
-        ${isLive?'<div class="divider"></div>':'<div class="spacer"></div>'}
-        <div>${w.team.displayName} - ${w.score}</div>
-        <div>${l.team.displayName} - ${l.score}</div>
-        <div class="spacer"></div></div>`;
+            ${isLive?'<div class="divider"></div>':'<div class="spacer"></div>'}
+            <div>${w.team.displayName} - ${w.score}</div>
+            <div>${l.team.displayName} - ${l.score}</div>
+            <div class="spacer"></div>
+        </div>`;
     }
-
-    const tableHTML=buildTable(away,home);
 
     let broadcast="";
-    if(!isFinal && comp.broadcasts?.length){
-        broadcast=comp.broadcasts.map(b=>b.names).join(", ");
-    }
+    if(!isFinal && comp.broadcasts?.length) broadcast=comp.broadcasts.map(b=>b.names).join(", ");
 
     const gameDiv=document.createElement("div");
     gameDiv.className="game";
     gameDiv.dataset.eventId=event.id;
 
     gameDiv.innerHTML=`
-    <div class="team-line">
-    ${isLive?'<span class="live-badge">LIVE</span>':''}
+    <div class="team-line">${isLive?'<span class="live-badge">LIVE</span>':''}
     <img src="${away.team.logo}">${away.team.abbreviation} @ 
     <img src="${home.team.logo}">${home.team.abbreviation}
     </div>
@@ -188,7 +217,6 @@ function renderGame(event, grid){
 
     <div class="status">${statusText}</div>
     ${isLive?'<div class="divider"></div>':''}
-
     ${broadcast ? `<div class="status"><small>Watch: ${broadcast}</small></div>` : ""}
     `;
 
@@ -198,22 +226,20 @@ function renderGame(event, grid){
 
 // Ensure live section
 function ensureLiveSection(){
-    let liveGrid=document.querySelector(".live-grid");
-    if(!liveGrid){
-        const header=document.createElement("div");
-        header.className="section-title";
-        header.innerText="🔴 Live Games";
-
-        liveGrid=document.createElement("div");
-        liveGrid.className="content live-grid";
-
-        containerDiv.prepend(liveGrid);
-        containerDiv.prepend(header);
+    let lg=document.querySelector(".live-grid");
+    if(!lg){
+        const h=document.createElement("div");
+        h.className="section-title";
+        h.innerText="🔴 Live Games";
+        lg=document.createElement("div");
+        lg.className="content live-grid";
+        containerDiv.prepend(lg);
+        containerDiv.prepend(h);
     }
-    return liveGrid;
+    return lg;
 }
 
-// Load games
+// Load and display games
 async function loadGames(){
     containerDiv.innerHTML="";
     liveGamesMap={};
@@ -231,13 +257,11 @@ async function loadGames(){
         const liveEvents=data.events.filter(e=>e.status.type.state==="in");
         const nonLiveEvents=data.events.filter(e=>e.status.type.state!=="in");
 
-        // Live section
         if(offsets[i]===0 && liveEvents.length){
-            const liveGrid=ensureLiveSection();
-            liveEvents.forEach(e=>renderGame(e,liveGrid));
+            const lg=ensureLiveSection();
+            liveEvents.forEach(e=>renderGame(e,lg));
         }
 
-        // Other games
         if(nonLiveEvents.length){
             const title=document.createElement("div");
             title.className="section-title";
@@ -254,8 +278,10 @@ async function loadGames(){
     }
 }
 
-// Refresh + move to LIVE
+// Refresh and move to LIVE
 async function refreshLiveGames(){
+    if(currentLeague==="MLB") fetchMLBStarters(); // update starters occasionally
+
     const endpoint=leagues[currentLeague];
     const res=await fetch(`https://site.api.espn.com/apis/site/v2/sports/${endpoint}/scoreboard`);
     const data=await res.json();
@@ -268,26 +294,19 @@ async function refreshLiveGames(){
         const isLive=event.status.type.state==="in";
         const isFinal=event.status.type.completed;
 
-        let gameDiv=document.querySelector(`[data-event-id="${event.id}"]`);
-
-        // Move to LIVE with animation
+        const gameDiv=document.querySelector(`[data-event-id="${event.id}"]`);
         if(isLive && gameDiv && !gameDiv.closest(".live-grid")){
-            const liveGrid=ensureLiveSection();
-
+            const lg=ensureLiveSection();
             gameDiv.classList.add("live-animate");
-            liveGrid.prepend(gameDiv);
-
+            lg.prepend(gameDiv);
             setTimeout(()=>gameDiv.classList.remove("live-animate"),700);
         }
-
         if(!gameDiv) return;
 
         gameDiv.querySelectorAll(".score-lines").forEach(el=>el.remove());
-
         if(isLive||isFinal){
             const w=home.score>=away.score?home:away;
             const l=w===home?away:home;
-
             const scoreDiv=document.createElement("div");
             scoreDiv.className="score-lines";
             scoreDiv.innerHTML=`
@@ -295,15 +314,12 @@ async function refreshLiveGames(){
             <div>${w.team.displayName} - ${w.score}</div>
             <div>${l.team.displayName} - ${l.score}</div>
             <div class="spacer"></div>`;
-
             const tableEl=gameDiv.querySelector(".scoreboard");
             if(tableEl) gameDiv.insertBefore(scoreDiv,tableEl);
         }
-
         const tableHTML=buildTable(away,home);
         const oldTable=gameDiv.querySelector(".scoreboard");
         if(oldTable && tableHTML) oldTable.outerHTML=tableHTML;
-
         const statusDiv=gameDiv.querySelector(".status");
         statusDiv.textContent=isFinal?"Final":event.status.type.detail;
     });
