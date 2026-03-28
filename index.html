@@ -28,7 +28,7 @@ header { padding:15px; text-align:center; font-size:24px; font-weight:bold; back
 .spacer { height:6px; }
 .divider { border-top:1px solid #ddd; margin:6px 0; }
 
-.status { font-size:14px; color:#333; }
+.status { font-size:14px; color:#333; line-height:1.45; }
 .status small { font-size:12px; }
 
 .pitchers {
@@ -72,6 +72,43 @@ header { padding:15px; text-align:center; font-size:24px; font-weight:bold; back
 }
 .number-changed {
     animation:numberFlash 0.45s ease;
+}
+
+/* MLB count dots */
+.count-wrap {
+    display:inline-flex;
+    align-items:center;
+    gap:6px;
+    flex-wrap:wrap;
+}
+.count-label {
+    display:inline-flex;
+    align-items:center;
+    gap:4px;
+}
+.count-group {
+    display:inline-flex;
+    align-items:center;
+    gap:3px;
+    min-width:18px;
+}
+.dot {
+    width:8px;
+    height:8px;
+    border-radius:50%;
+    display:inline-block;
+    border:1px solid rgba(0,0,0,0.18);
+}
+.dot.ball { background:#facc15; }
+.dot.strike { background:#111827; }
+.dot.out { background:#dc2626; }
+.count-empty {
+    display:inline-block;
+    width:8px;
+    height:8px;
+    border-radius:50%;
+    background:#e5e7eb;
+    border:1px solid rgba(0,0,0,0.08);
 }
 </style>
 </head>
@@ -146,10 +183,43 @@ function formatPitcher(p){
     return `${name} (${details.join(", ")})`;
 }
 
+function getSituation(event){
+    const comp = event.competitions?.[0] || {};
+    return event.situation || comp.situation || {};
+}
+
+function buildDots(count, type, maxCount){
+    let html = '<span class="count-group">';
+    for(let i = 0; i < maxCount; i++){
+        if(i < count){
+            html += `<span class="dot ${type}"></span>`;
+        } else {
+            html += `<span class="count-empty"></span>`;
+        }
+    }
+    html += '</span>';
+    return html;
+}
+
+function buildMlbCountHTML(situation){
+    const balls = situation.balls ?? 0;
+    const strikes = situation.strikes ?? 0;
+    const outs = situation.outs ?? 0;
+
+    return `
+        <span class="count-wrap">
+            <span class="count-label">Balls: ${buildDots(balls, "ball", 3)}</span> /
+            <span class="count-label">Strikes: ${buildDots(strikes, "strike", 2)}</span> /
+            <span class="count-label">Outs: ${buildDots(outs, "out", 3)}</span>
+        </span>
+    `;
+}
+
 function buildGameState(event){
     const comp = event.competitions[0];
     const home = comp.competitors.find(t => t.homeAway === "home");
     const away = comp.competitors.find(t => t.homeAway === "away");
+    const situation = getSituation(event);
 
     return JSON.stringify({
         state: event.status.type.state,
@@ -158,6 +228,9 @@ function buildGameState(event){
         shortDetail: event.status.type.shortDetail,
         homeScore: home.score,
         awayScore: away.score,
+        balls: situation.balls ?? null,
+        strikes: situation.strikes ?? null,
+        outs: situation.outs ?? null,
         homeLines: (home.linescores || []).map(ls => ({
             period: ls.period ?? null,
             value: ls.value ?? "",
@@ -182,9 +255,32 @@ function formatGameTime(dateString){
 }
 
 function getStatusText(event){
-    if(event.status.type.completed) return "Final";
-    if(event.status.type.state === "in") return event.status.type.detail || event.status.type.shortDetail || "Live";
-    return formatGameTime(event.date);
+    const situation = getSituation(event);
+    const isFinal = event.status.type.completed;
+    const isLive = event.status.type.state === "in";
+
+    let baseText;
+
+    if(isFinal){
+        baseText = "Final";
+    } else if(isLive){
+        baseText = event.status.type.detail || event.status.type.shortDetail || "Live";
+    } else {
+        baseText = formatGameTime(event.date);
+    }
+
+    if(currentLeague === "MLB" && isLive){
+        const hasCountData =
+            situation.balls != null ||
+            situation.strikes != null ||
+            situation.outs != null;
+
+        if(hasCountData){
+            return `${baseText} &bull; ${buildMlbCountHTML(situation)}`;
+        }
+    }
+
+    return baseText;
 }
 
 function normalizeLineScore(line, index){
@@ -316,6 +412,20 @@ function animateChangedValue(element, newValue){
     target.classList.add("number-changed");
 }
 
+function animateTextSpan(span, newValue){
+    if(!span) return;
+
+    const oldValue = span.textContent.trim();
+    const nextValue = String(newValue ?? "").trim();
+
+    if(oldValue === nextValue) return;
+
+    span.textContent = nextValue;
+    span.classList.remove("number-changed");
+    void span.offsetWidth;
+    span.classList.add("number-changed");
+}
+
 function ensureScoreLines(gameDiv, isLive){
     let scoreDiv = gameDiv.querySelector(".score-lines");
 
@@ -346,19 +456,6 @@ function ensureScoreLines(gameDiv, isLive){
     return scoreDiv;
 }
 
-function animateTextSpan(span, newValue){
-    if(!span) return;
-    const oldValue = span.textContent.trim();
-    const nextValue = String(newValue ?? "").trim();
-
-    if(oldValue === nextValue) return;
-
-    span.textContent = nextValue;
-    span.classList.remove("number-changed");
-    void span.offsetWidth;
-    span.classList.add("number-changed");
-}
-
 function updateScoreLines(gameDiv, topTeam, bottomTeam, isLive, isFinal){
     if(!isLive && !isFinal){
         const oldScore = gameDiv.querySelector(".score-lines");
@@ -382,8 +479,9 @@ function updateScoreLines(gameDiv, topTeam, bottomTeam, isLive, isFinal){
 function updateStatusUI(gameDiv, event){
     const statusText = getStatusText(event);
     const statusDiv = gameDiv.querySelector(".game-status");
-    if(statusDiv && statusDiv.textContent !== statusText){
-        statusDiv.textContent = statusText;
+
+    if(statusDiv && statusDiv.innerHTML !== statusText){
+        statusDiv.innerHTML = statusText;
     }
 
     const isLive = event.status.type.state === "in";
@@ -533,35 +631,6 @@ function renderGame(event, grid){
     gameStateMap[event.id] = buildGameState(event);
 }
 
-function ensureLiveSection(){
-    let liveHeader = containerDiv.querySelector(".live-header");
-    let liveGrid = containerDiv.querySelector(".live-grid");
-
-    if(!liveHeader){
-        liveHeader = document.createElement("div");
-        liveHeader.className = "section-title live-header";
-        liveHeader.innerText = "🔴 Live Games";
-        containerDiv.appendChild(liveHeader);
-    }
-
-    if(!liveGrid){
-        liveGrid = document.createElement("div");
-        liveGrid.className = "content live-grid";
-        containerDiv.appendChild(liveGrid);
-    }
-
-    return liveGrid;
-}
-
-function removeLiveSectionIfEmpty(){
-    const liveGrid = containerDiv.querySelector(".live-grid");
-    const liveHeader = containerDiv.querySelector(".live-header");
-    if(liveGrid && !liveGrid.children.length){
-        if(liveHeader) liveHeader.remove();
-        liveGrid.remove();
-    }
-}
-
 async function loadGames(){
     containerDiv.innerHTML = "";
     gameStateMap = {};
@@ -571,43 +640,63 @@ async function loadGames(){
     const titles = ["Today's Games", "Tomorrow's Games", "Yesterday's Games"];
     const seenIds = new Set();
 
+    let allEvents = [];
+
     for(let i = 0; i < offsets.length; i++){
         const res = await fetch(`https://site.api.espn.com/apis/site/v2/sports/${endpoint}/scoreboard?dates=${getDate(offsets[i])}`);
         const data = await res.json();
 
-        if(!data.events?.length) continue;
+        if(!data.events) continue;
 
-        const uniqueEvents = data.events.filter(e => {
-            if(seenIds.has(e.id)) return false;
-            seenIds.add(e.id);
-            return true;
+        data.events.forEach(e => {
+            if(!seenIds.has(e.id)){
+                seenIds.add(e.id);
+                allEvents.push({ event: e, offsetIndex: i });
+            }
         });
-
-        const liveEvents = uniqueEvents.filter(e => e.status.type.state === "in");
-        const nonLiveEvents = uniqueEvents.filter(e => e.status.type.state !== "in");
-
-        if(liveEvents.length){
-            const liveGrid = ensureLiveSection();
-            liveEvents.sort((a, b) => new Date(a.date) - new Date(b.date));
-            liveEvents.forEach(e => renderGame(e, liveGrid));
-        }
-
-        if(nonLiveEvents.length){
-            const title = document.createElement("div");
-            title.className = "section-title";
-            title.innerText = titles[i];
-            containerDiv.appendChild(title);
-
-            const grid = document.createElement("div");
-            grid.className = "content";
-            containerDiv.appendChild(grid);
-
-            nonLiveEvents.sort((a, b) => new Date(a.date) - new Date(b.date));
-            nonLiveEvents.forEach(e => renderGame(e, grid));
-        }
     }
 
-    removeLiveSectionIfEmpty();
+    const liveEvents = allEvents.filter(e => e.event.status.type.state === "in");
+    const groupedEvents = [[], [], []];
+
+    allEvents.forEach(e => {
+        if(e.event.status.type.state !== "in"){
+            groupedEvents[e.offsetIndex].push(e.event);
+        }
+    });
+
+    if(liveEvents.length){
+        const liveHeader = document.createElement("div");
+        liveHeader.className = "section-title live-header";
+        liveHeader.innerText = "🔴 Live Games";
+        containerDiv.appendChild(liveHeader);
+
+        const liveGrid = document.createElement("div");
+        liveGrid.className = "content live-grid";
+        containerDiv.appendChild(liveGrid);
+
+        liveEvents
+            .map(e => e.event)
+            .sort((a,b) => new Date(a.date) - new Date(b.date))
+            .forEach(e => renderGame(e, liveGrid));
+    }
+
+    groupedEvents.forEach((events, i) => {
+        if(!events.length) return;
+
+        const title = document.createElement("div");
+        title.className = "section-title";
+        title.innerText = titles[i];
+        containerDiv.appendChild(title);
+
+        const grid = document.createElement("div");
+        grid.className = "content";
+        containerDiv.appendChild(grid);
+
+        events
+            .sort((a,b) => new Date(a.date) - new Date(b.date))
+            .forEach(e => renderGame(e, grid));
+    });
 }
 
 async function fetchEventsForRefresh(){
@@ -637,13 +726,17 @@ async function refreshLiveGames(){
     try {
         const events = await fetchEventsForRefresh();
         let requiresReload = false;
+        let liveGameJustStarted = false;
 
         for(const event of events){
             const gameDiv = document.querySelector(`[data-event-id="${event.id}"]`);
             const isLive = event.status.type.state === "in";
 
             if(!gameDiv){
-                if(isLive) requiresReload = true;
+                if(isLive){
+                    requiresReload = true;
+                    liveGameJustStarted = true;
+                }
                 continue;
             }
 
@@ -673,13 +766,30 @@ async function refreshLiveGames(){
             const previousLive = previousParsed?.state === "in";
             const previousCompleted = previousParsed?.completed === true;
 
-            if(previousParsed && (previousLive !== isLive || previousCompleted !== isFinal)){
+            if(previousParsed && previousLive !== isLive){
+                requiresReload = true;
+                if(!previousLive && isLive){
+                    liveGameJustStarted = true;
+                }
+            }
+
+            if(previousParsed && previousCompleted !== isFinal){
                 requiresReload = true;
             }
         }
 
         if(requiresReload){
             await loadGames();
+
+            if(liveGameJustStarted){
+                const liveHeader = document.querySelector(".live-header");
+                if(liveHeader){
+                    liveHeader.scrollIntoView({
+                        behavior: "smooth",
+                        block: "start"
+                    });
+                }
+            }
         }
     } catch (err) {
         console.error("Refresh failed:", err);
@@ -689,7 +799,7 @@ async function refreshLiveGames(){
 }
 
 loadGames();
-setInterval(refreshLiveGames, 15000);
+setInterval(refreshLiveGames, 10000);
 </script>
 
 </body>
