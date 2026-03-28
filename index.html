@@ -118,23 +118,23 @@ header { padding:15px; text-align:center; font-size:24px; font-weight:bold; back
     border:1px solid rgba(0,0,0,0.08);
 }
 
-/* Base runner diamond */
+/* Base runner diamond - tightened */
 .basepath-wrap {
     display:inline-flex;
     align-items:center;
-    gap:8px;
+    gap:6px;
     flex-wrap:wrap;
 }
 .baseball-diamond {
     position: relative;
-    width: 28px;
-    height: 24px;
-    margin: 2px 4px 2px 2px;
+    width: 22px;
+    height: 18px;
+    margin: 1px 2px 1px 1px;
 }
 .base {
     position: absolute;
-    width: 9px;
-    height: 9px;
+    width: 8px;
+    height: 8px;
     background: #e5e7eb;
     border: 1px solid rgba(0,0,0,0.12);
     box-sizing: border-box;
@@ -143,11 +143,11 @@ header { padding:15px; text-align:center; font-size:24px; font-weight:bold; back
 }
 .base.on {
     background: #22c55e;
-    box-shadow: 0 0 6px rgba(34,197,94,0.45);
+    box-shadow: 0 0 5px rgba(34,197,94,0.4);
 }
 .base.second { top: 0; left: 50%; transform: translateX(-50%) rotate(45deg); }
-.base.third  { bottom: 0; left: 2px; }
-.base.first  { bottom: 0; right: 2px; }
+.base.third  { bottom: 0; left: 3px; }
+.base.first  { bottom: 0; right: 3px; }
 </style>
 </head>
 
