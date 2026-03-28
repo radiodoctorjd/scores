@@ -30,6 +30,13 @@ header { padding:15px; text-align:center; font-size:24px; font-weight:bold; back
 
 .status { font-size:14px; color:#333; line-height:1.45; }
 .status small { font-size:12px; }
+.status-line {
+    display:block;
+    margin-top:2px;
+}
+.status-line:first-child {
+    margin-top:0;
+}
 
 .pitchers {
     font-size:12px;
@@ -78,7 +85,7 @@ header { padding:15px; text-align:center; font-size:24px; font-weight:bold; back
 .count-wrap {
     display:inline-flex;
     align-items:center;
-    gap:6px;
+    gap:10px;
     flex-wrap:wrap;
 }
 .count-label {
@@ -110,6 +117,37 @@ header { padding:15px; text-align:center; font-size:24px; font-weight:bold; back
     background:#e5e7eb;
     border:1px solid rgba(0,0,0,0.08);
 }
+
+/* Base runner diamond */
+.basepath-wrap {
+    display:inline-flex;
+    align-items:center;
+    gap:8px;
+    flex-wrap:wrap;
+}
+.baseball-diamond {
+    position: relative;
+    width: 28px;
+    height: 24px;
+    margin: 2px 4px 2px 2px;
+}
+.base {
+    position: absolute;
+    width: 9px;
+    height: 9px;
+    background: #e5e7eb;
+    border: 1px solid rgba(0,0,0,0.12);
+    box-sizing: border-box;
+    border-radius: 1px;
+    transform: rotate(45deg);
+}
+.base.on {
+    background: #22c55e;
+    box-shadow: 0 0 6px rgba(34,197,94,0.45);
+}
+.base.second { top: 0; left: 50%; transform: translateX(-50%) rotate(45deg); }
+.base.third  { bottom: 0; left: 2px; }
+.base.first  { bottom: 0; right: 2px; }
 </style>
 </head>
 
@@ -201,16 +239,43 @@ function buildDots(count, type, maxCount){
     return html;
 }
 
-function buildMlbCountHTML(situation){
-    const balls = situation.balls ?? 0;
-    const strikes = situation.strikes ?? 0;
-    const outs = situation.outs ?? 0;
+function getBaseOccupancy(situation){
+    const athletes = situation?.onFirst || situation?.onSecond || situation?.onThird
+        ? null
+        : (situation?.runners || situation?.baseRunners || situation?.athletes || []);
+
+    const first = !!(
+        situation?.onFirst ||
+        situation?.first ||
+        athletes?.some?.(r => r?.base === 1 || r?.currentBase === 1 || r?.baseNumber === 1)
+    );
+
+    const second = !!(
+        situation?.onSecond ||
+        situation?.second ||
+        athletes?.some?.(r => r?.base === 2 || r?.currentBase === 2 || r?.baseNumber === 2)
+    );
+
+    const third = !!(
+        situation?.onThird ||
+        situation?.third ||
+        athletes?.some?.(r => r?.base === 3 || r?.currentBase === 3 || r?.baseNumber === 3)
+    );
+
+    return { first, second, third };
+}
+
+function buildBaseDiamondHTML(situation){
+    const bases = getBaseOccupancy(situation);
 
     return `
-        <span class="count-wrap">
-            <span class="count-label">Balls: ${buildDots(balls, "ball", 3)}</span> /
-            <span class="count-label">Strikes: ${buildDots(strikes, "strike", 2)}</span> /
-            <span class="count-label">Outs: ${buildDots(outs, "out", 3)}</span>
+        <span class="basepath-wrap">
+            <span>Bases:</span>
+            <span class="baseball-diamond" aria-label="Base runner diamond">
+                <span class="base second ${bases.second ? 'on' : ''}"></span>
+                <span class="base third ${bases.third ? 'on' : ''}"></span>
+                <span class="base first ${bases.first ? 'on' : ''}"></span>
+            </span>
         </span>
     `;
 }
@@ -220,6 +285,7 @@ function buildGameState(event){
     const home = comp.competitors.find(t => t.homeAway === "home");
     const away = comp.competitors.find(t => t.homeAway === "away");
     const situation = getSituation(event);
+    const bases = getBaseOccupancy(situation);
 
     return JSON.stringify({
         state: event.status.type.state,
@@ -231,6 +297,9 @@ function buildGameState(event){
         balls: situation.balls ?? null,
         strikes: situation.strikes ?? null,
         outs: situation.outs ?? null,
+        onFirst: bases.first,
+        onSecond: bases.second,
+        onThird: bases.third,
         homeLines: (home.linescores || []).map(ls => ({
             period: ls.period ?? null,
             value: ls.value ?? "",
@@ -259,28 +328,45 @@ function getStatusText(event){
     const isFinal = event.status.type.completed;
     const isLive = event.status.type.state === "in";
 
-    let baseText;
+    let inningText;
 
     if(isFinal){
-        baseText = "Final";
+        inningText = "Final";
     } else if(isLive){
-        baseText = event.status.type.detail || event.status.type.shortDetail || "Live";
+        inningText = event.status.type.detail || event.status.type.shortDetail || "Live";
     } else {
-        baseText = formatGameTime(event.date);
+        return formatGameTime(event.date);
     }
 
     if(currentLeague === "MLB" && isLive){
-        const hasCountData =
-            situation.balls != null ||
-            situation.strikes != null ||
-            situation.outs != null;
+        const balls = situation.balls ?? 0;
+        const strikes = situation.strikes ?? 0;
+        const outs = situation.outs ?? 0;
 
-        if(hasCountData){
-            return `${baseText} &bull; ${buildMlbCountHTML(situation)}`;
-        }
+        const countLine = `
+            <span class="status-line">
+                <span class="count-wrap">
+                    <span class="count-label">Balls: ${buildDots(balls, "ball", 3)}</span>
+                    <span class="count-label">Strikes: ${buildDots(strikes, "strike", 2)}</span>
+                    <span class="count-label">Outs: ${buildDots(outs, "out", 3)}</span>
+                </span>
+            </span>
+        `;
+
+        const baseLine = `
+            <span class="status-line">
+                ${buildBaseDiamondHTML(situation)}
+            </span>
+        `;
+
+        return `
+            <span class="status-line"><strong>${inningText}</strong></span>
+            ${countLine}
+            ${baseLine}
+        `;
     }
 
-    return baseText;
+    return inningText;
 }
 
 function normalizeLineScore(line, index){
