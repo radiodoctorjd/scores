@@ -69,6 +69,14 @@ header { padding:15px; text-align:center; font-size:24px; font-weight:bold; back
     line-height:1.35;
 }
 
+.goalies {
+    font-size:12px;
+    color:#475569;
+    margin-top:7px;
+    margin-bottom:12px;
+    line-height:1.35;
+}
+
 .score-lines {
     margin-top:4px;
     margin-bottom:4px;
@@ -224,144 +232,7 @@ const tabsDiv = document.getElementById("tabs");
 const containerDiv = document.getElementById("content-container");
 let gameStateMap = {};
 let refreshInFlight = false;
-
-const goalieCache = new Map();
-const TEAM_ALIAS_MAP = {
-    ANA:['ANA','DUCKS'], BOS:['BOS','BRUINS'], BUF:['BUF','SABRES'], CAR:['CAR','HURRICANES'], CBJ:['CBJ','BLUE JACKETS','COLUMBUS'], CGY:['CGY','FLAMES'], CHI:['CHI','BLACKHAWKS'], COL:['COL','AVALANCHE'], DAL:['DAL','STARS'], DET:['DET','RED WINGS'], EDM:['EDM','OILERS'], FLA:['FLA','PANTHERS'], LAK:['LA','LAK','KINGS'], MIN:['MIN','WILD'], MTL:['MON','MTL','CANADIENS'], NJD:['NJ','NJD','DEVILS'], NSH:['NSH','PREDATORS'], NYI:['NYI','ISLANDERS'], NYR:['NYR','RANGERS'], OTT:['OTT','SENATORS'], PHI:['PHI','FLYERS'], PIT:['PIT','PENGUINS'], SEA:['SEA','KRAKEN'], SJS:['SJ','SJS','SHARKS'], STL:['STL','BLUES'], TBL:['TB','TBL','LIGHTNING'], TOR:['TOR','MAPLE LEAFS'], UTA:['UTA','UTAH'], VAN:['VAN','CANUCKS'], VGK:['VGK','GOLDEN KNIGHTS'], WPG:['WPG','JETS'], WSH:['WSH','CAPITALS']
-};
-
-function normalizeNhlAbbr(abbr){
-    const val = String(abbr || '').toUpperCase().trim();
-    for(const [canon, aliases] of Object.entries(TEAM_ALIAS_MAP)){
-        if(aliases.includes(val)) return canon;
-    }
-    return val;
-}
-
-function goalieLineHtml(teamAbbr, goalie){
-    const name = goalie?.name || 'TBD';
-    const status = goalie?.status ? `<span class="goalie-status">(${goalie.status})</span>` : '';
-    return `<div>${teamAbbr}: ${name}${status}</div>`;
-}
-
-function parseGoaliesFromRotowireHtml(html){
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(html, 'text/html');
-    const result = {};
-
-    const boxes = Array.from(doc.querySelectorAll('[class*="lineup__box"], .lineup__box'));
-    for(const box of boxes){
-        const teamNodes = Array.from(box.querySelectorAll('[class*="lineup__abbr"], .lineup__abbr'));
-        const teams = teamNodes.map(n => normalizeNhlAbbr(n.textContent)).filter(Boolean);
-        if(teams.length < 2) continue;
-
-        const text = box.textContent.replace(/\s+/g, ' ').trim();
-        const goalieNames = [];
-        const playerNodes = Array.from(box.querySelectorAll('[class*="lineup__player"], .lineup__player, a[href*="/hockey/player/"]'));
-        for(const node of playerNodes){
-            const name = (node.textContent || '').replace(/\s+/g, ' ').trim();
-            if(!name || goalieNames.includes(name)) continue;
-            if(name.length < 4) continue;
-            goalieNames.push(name);
-        }
-
-        const statusMatches = [...text.matchAll(/\b(Confirmed|Expected|Likely|Projected|Unconfirmed)\b/gi)].map(m => m[1]);
-
-        if(goalieNames[0]) result[teams[0]] = { name: goalieNames[0], status: statusMatches[0] || 'Projected' };
-        if(goalieNames[1]) result[teams[1]] = { name: goalieNames[1], status: statusMatches[1] || 'Projected' };
-    }
-
-    if(Object.keys(result).length) return result;
-
-    const plain = doc.body?.textContent || html;
-    return parseGoaliesFromText(plain);
-}
-
-function parseGoaliesFromText(text){
-    const cleaned = String(text || '')
-        .replace(/\r/g, '\n')
-        .replace(/[ \t]+/g, ' ')
-        .replace(/Image:\s*/g, '')
-        .replace(/\n{2,}/g, '\n');
-    const lines = cleaned.split('\n').map(s => s.trim()).filter(Boolean);
-    const out = {};
-
-    for(let i = 0; i < lines.length; i++) {
-        const line = lines[i].toUpperCase();
-        const abbrMatch = Object.keys(TEAM_ALIAS_MAP).find(abbr => new RegExp(`\\b${abbr}\\b`).test(line));
-        if(!abbrMatch) continue;
-
-        let goalieName = '';
-        let status = '';
-        for(let j = i + 1; j < Math.min(i + 8, lines.length); j++) {
-            const candidate = lines[j];
-            if(/^(Confirmed|Expected|Likely|Projected|Unconfirmed)$/i.test(candidate)) {
-                status = candidate;
-                continue;
-            }
-            if(/^[A-Z]{2,4}$/.test(candidate)) break;
-            if(!goalieName && /^[A-Z][a-z]+(?:[-' .][A-Z][a-z]+)+$/.test(candidate)) goalieName = candidate;
-            if(goalieName && status) break;
-        }
-        if(goalieName) out[abbrMatch] = { name: goalieName, status: status || 'Projected' };
-    }
-    return out;
-}
-
-async function fetchText(url){
-    const res = await fetch(url, { cache: 'no-store' });
-    if(!res.ok) throw new Error(`HTTP ${res.status}`);
-    return await res.text();
-}
-
-async function fetchJson(url){
-    const res = await fetch(url, { cache: 'no-store' });
-    if(!res.ok) throw new Error(`HTTP ${res.status}`);
-    return await res.json();
-}
-
-async function loadNhlGoalies(){
-    const cacheKey = getDate(0);
-    if(goalieCache.has(cacheKey)) return goalieCache.get(cacheKey);
-
-    const target = 'https://www.rotowire.com/hockey/nhl-lineups.php';
-    const attempts = [
-        () => fetchText(`https://api.allorigins.win/raw?url=${encodeURIComponent(target)}`),
-        async () => (await fetchJson(`https://api.allorigins.win/get?url=${encodeURIComponent(target)}`)).contents || '',
-        () => fetchText(`https://r.jina.ai/http://${target.replace(/^https?:\/\//, '')}`),
-        () => fetchText(target)
-    ];
-
-    for(const attempt of attempts){
-        try {
-            const payload = await Promise.race([attempt(), new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000))]);
-            if(!payload || String(payload).length < 100) continue;
-            const parsed = /<html/i.test(payload) ? parseGoaliesFromRotowireHtml(payload) : parseGoaliesFromText(payload);
-            if(parsed && Object.keys(parsed).length){
-                goalieCache.set(cacheKey, parsed);
-                return parsed;
-            }
-        } catch (err) {
-            console.warn('Goalie source failed:', err);
-        }
-    }
-
-    goalieCache.set(cacheKey, {});
-    return {};
-}
-
-async function populateVisibleGoalies(){
-    if(currentLeague !== 'NHL') return;
-    const goalies = await loadNhlGoalies();
-    document.querySelectorAll('.game[data-event-id] .goalies').forEach(box => {
-        const away = normalizeNhlAbbr(box.dataset.awayAbbr);
-        const home = normalizeNhlAbbr(box.dataset.homeAbbr);
-        box.innerHTML = `
-            ${goalieLineHtml(box.dataset.awayAbbr, goalies[away])}
-            ${goalieLineHtml(box.dataset.homeAbbr, goalies[home])}
-        `;
-    });
-}
+let nhlGoalieCache = {};
 
 Object.keys(leagues).forEach(l => {
     const tab = document.createElement("div");
@@ -381,40 +252,215 @@ function getSortedTeams(home, away){
     return Number(home.score) >= Number(away.score) ? [home, away] : [away, home];
 }
 
-function extractEraValue(p){
-    if(!p) return "--";
-
-    const stats = Array.isArray(p.statistics) ? p.statistics : [];
-    const direct = stats.find(s => String(s?.name || '').toLowerCase() === 'era')?.displayValue;
-    if(direct && direct !== '0' && direct !== '0.00') return direct.replace(/\s*ERA$/i, '').trim();
-
-    const candidates = [
-        ...stats.map(s => s?.displayValue),
-        ...stats.map(s => s?.summary),
-        p?.displayValue,
-        p?.summary,
-        p?.shortDisplayName,
-        p?.displayName
-    ].filter(Boolean);
-
-    for(const value of candidates){
-        const match = String(value).match(/(\d+\.\d+)\s*ERA/i);
-        if(match) return match[1];
-    }
-
-    for(const value of candidates){
-        const match = String(value).match(/(\d+\.\d+)/);
-        if(match) return match[1];
-    }
-
-    return '--';
-}
 
 function formatPitcher(p){
     if(!p) return "TBD";
-    const name = p.athlete?.displayName || "TBD";
-    const era = extractEraValue(p);
-    return `${name} (${era} ERA)`;
+
+    const name = p.athlete?.displayName || p.displayName || "TBD";
+    const handRaw = p.athlete?.hand?.type || p.hand?.type || p.throwingHand;
+    const hand = handRaw === "L" ? "LHP" : handRaw === "R" ? "RHP" : "";
+
+    let era = p.statistics?.find(s =>
+        String(s?.name || '').toLowerCase() === 'era' ||
+        String(s?.displayName || '').toLowerCase().includes('era') ||
+        String(s?.abbreviation || '').toLowerCase() === 'era'
+    )?.displayValue;
+
+    if(!era || era === "0" || era === "0.00"){
+        const statTexts = [
+            ...(p.statistics || []).map(s => `${s?.displayName || ''} ${s?.displayValue || ''}`),
+            p.summary,
+            p.note,
+            p.description
+        ].filter(Boolean).join(' | ');
+
+        const eraMatch = statTexts.match(/(?:^|[\s|(])(\d+\.\d+)\s*ERA\b/i)
+            || statTexts.match(/\bERA[:\s]+(\d+\.\d+)/i);
+        if(eraMatch) era = eraMatch[1];
+    }
+
+    if(!era || era === "0") era = "--";
+
+    const record = p.records?.[0]?.summary || p.record || "";
+
+    const details = [];
+    if(hand) details.push(hand);
+    if(record) details.push(record);
+    details.push(`${era} ERA`);
+
+    return `${name} (${details.join(", ")})`;
+}
+
+function toIsoDate(dateString){
+    const d = new Date(dateString);
+    if(Number.isNaN(d.getTime())) return "";
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+}
+
+function normalizeName(value){
+    return String(value || '')
+        .toLowerCase()
+        .replace(/&amp;/g, 'and')
+        .replace(/&/g, 'and')
+        .replace(/[().,'’\-]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+const nhlTeamNameToAbbr = {
+    'anaheim ducks': 'ANA',
+    'boston bruins': 'BOS',
+    'buffalo sabres': 'BUF',
+    'calgary flames': 'CGY',
+    'carolina hurricanes': 'CAR',
+    'chicago blackhawks': 'CHI',
+    'colorado avalanche': 'COL',
+    'columbus blue jackets': 'CBJ',
+    'dallas stars': 'DAL',
+    'detroit red wings': 'DET',
+    'edmonton oilers': 'EDM',
+    'florida panthers': 'FLA',
+    'los angeles kings': 'LA',
+    'la kings': 'LA',
+    'minnesota wild': 'MIN',
+    'montreal canadiens': 'MTL',
+    'nashville predators': 'NSH',
+    'new jersey devils': 'NJ',
+    'new york islanders': 'NYI',
+    'new york rangers': 'NYR',
+    'ottawa senators': 'OTT',
+    'philadelphia flyers': 'PHI',
+    'pittsburgh penguins': 'PIT',
+    'san jose sharks': 'SJ',
+    'seattle kraken': 'SEA',
+    'st louis blues': 'STL',
+    'st. louis blues': 'STL',
+    'tampa bay lightning': 'TB',
+    'toronto maple leafs': 'TOR',
+    'utah hockey club': 'UTA',
+    'utah mammoth': 'UTA',
+    'vancouver canucks': 'VAN',
+    'vegas golden knights': 'VGK',
+    'washington capitals': 'WSH',
+    'winnipeg jets': 'WPG'
+};
+
+function fetchWithTimeout(url, timeoutMs = 5000){
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    return fetch(url, { signal: controller.signal, cache: 'no-store' })
+        .finally(() => clearTimeout(timeoutId));
+}
+
+function buildTextProxyUrls(url){
+    const u = new URL(url);
+    const noScheme = `${u.host}${u.pathname}${u.search}`;
+    return [
+        url,
+        `https://r.jina.ai/http://${noScheme}`,
+        `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+        `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`
+    ];
+}
+
+async function fetchTextWithFallback(url){
+    for(const candidate of buildTextProxyUrls(url)){
+        try {
+            const res = await fetchWithTimeout(candidate, candidate.includes('r.jina.ai') ? 8000 : 5000);
+            if(!res.ok) continue;
+            if(candidate.includes('/get?url=')){
+                const data = await res.json();
+                if(data?.contents) return data.contents;
+            } else {
+                const body = await res.text();
+                if(body) return body;
+            }
+        } catch (err) {}
+    }
+    return "";
+}
+
+function isLikelyGoalieName(line){
+    const s = String(line || '').trim();
+    if(!s) return false;
+    if (/\bat\b/i.test(s) && s.split(/\s+/).length > 3) return false;
+    if (/^\d/.test(s)) return false;
+    if (/^(show more|line combos|news|stats|schedule|source)$/i.test(s)) return false;
+    if (/(W-L-OTL|GAA|SV%|SO:|Source:|updated|today|tomorrow|yesterday)/i.test(s)) return false;
+    return /^[A-Z][A-Za-z.\-']+(?:\s+[A-Z][A-Za-z.\-']+){1,3}$/.test(s);
+}
+
+function parseDailyFaceoffGoalies(text){
+    const goalieMap = {};
+    const statuses = new Set(['Confirmed','Expected','Likely','Projected','Unconfirmed']);
+    const lines = String(text || '')
+        .replace(/\r/g, '\n')
+        .split('\n')
+        .map(s => s.trim())
+        .filter(Boolean);
+
+    for(let i = 0; i < lines.length; i++){
+        const matchup = lines[i].split(/\s+at\s+/i);
+        if(matchup.length !== 2) continue;
+
+        const awayAbbr = nhlTeamNameToAbbr[normalizeName(matchup[0])];
+        const homeAbbr = nhlTeamNameToAbbr[normalizeName(matchup[1])];
+        if(!awayAbbr || !homeAbbr) continue;
+
+        const found = [];
+        for(let j = i + 1; j < Math.min(i + 45, lines.length) && found.length < 2; j++){
+            const nameLine = lines[j];
+            const nextLine = lines[j + 1] || '';
+            if(isLikelyGoalieName(nameLine) && statuses.has(nextLine)){
+                found.push({ name: nameLine, status: nextLine });
+                j += 1;
+            }
+        }
+
+        if(found[0]) goalieMap[awayAbbr] = found[0];
+        if(found[1]) goalieMap[homeAbbr] = found[1];
+    }
+
+    return goalieMap;
+}
+
+async function fetchNHLGoaliesForDate(dateString){
+    const isoDate = toIsoDate(dateString);
+    if(!isoDate) return {};
+
+    if(!nhlGoalieCache[isoDate]){
+        nhlGoalieCache[isoDate] = (async () => {
+            const urls = [
+                `https://www.dailyfaceoff.com/starting-goalies/${isoDate}`,
+                `https://www.dailyfaceoff.com/starting-goalies`
+            ];
+
+            for(const url of urls){
+                const text = await fetchTextWithFallback(url);
+                const parsed = parseDailyFaceoffGoalies(text);
+                if(Object.keys(parsed).length) return parsed;
+            }
+            return {};
+        })();
+    }
+
+    return await nhlGoalieCache[isoDate];
+}
+
+function formatGoalie(goalie){
+    if(!goalie) return 'TBD';
+    if(typeof goalie === 'string') return goalie;
+    return goalie.status ? `${goalie.name} (${goalie.status})` : goalie.name || 'TBD';
+}
+
+function updateGoaliesUI(gameDiv, awayAbbr, homeAbbr, goaliesByTeam){
+    const awayEl = gameDiv.querySelector('.goalie-away');
+    const homeEl = gameDiv.querySelector('.goalie-home');
+    if(awayEl) awayEl.textContent = `${awayAbbr}: ${formatGoalie(goaliesByTeam?.[awayAbbr])}`;
+    if(homeEl) homeEl.textContent = `${homeAbbr}: ${formatGoalie(goaliesByTeam?.[homeAbbr])}`;
 }
 
 function getSituation(event){
@@ -1135,10 +1181,12 @@ function renderGame(event, grid){
         <div class="pitchers">
             <div>${away.team.abbreviation}: ${formatPitcher(away.probables?.[0])}</div>
             <div>${home.team.abbreviation}: ${formatPitcher(home.probables?.[0])}</div>
-        </div>` : currentLeague === "NHL" ? `
-        <div class="goalies goalie-loading" data-away-abbr="${away.team.abbreviation}" data-home-abbr="${home.team.abbreviation}">
-            <div>${away.team.abbreviation}: TBD</div>
-            <div>${home.team.abbreviation}: TBD</div>
+        </div>` : ""}
+
+        ${currentLeague === "NHL" ? `
+        <div class="goalies">
+            <div class="goalie-away">${away.team.abbreviation}: TBD</div>
+            <div class="goalie-home">${home.team.abbreviation}: TBD</div>
         </div>` : ""}
 
         ${scoreHTML}
@@ -1154,6 +1202,13 @@ function renderGame(event, grid){
 
     grid.appendChild(gameDiv);
     bindDetailsToggle(gameDiv);
+
+    if(currentLeague === "NHL"){
+        fetchNHLGoaliesForDate(event.date)
+            .then(goaliesByTeam => updateGoaliesUI(gameDiv, away.team.abbreviation, home.team.abbreviation, goaliesByTeam))
+            .catch(err => console.error("Goalie fetch failed:", err));
+    }
+
     gameStateMap[event.id] = buildGameState(event);
 }
 
@@ -1223,10 +1278,6 @@ async function loadGames(){
             .sort((a,b) => new Date(a.date) - new Date(b.date))
             .forEach(e => renderGame(e, grid));
     });
-
-    if(currentLeague === 'NHL') {
-        populateVisibleGoalies();
-    }
 }
 
 async function fetchEventsForRefresh(){
