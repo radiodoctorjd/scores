@@ -8,7 +8,7 @@
 
 <style>
 body { font-family: Arial, sans-serif; margin:0; background:#0f172a; color:white; }
-header { padding:15px; text-align:center; font-size:24px; font-weight:bold; background:#020617; }
+header { padding:15px; text-align:center; font-size:24px; font-weight:bold; background:#020617; letter-spacing:0.2px; }
 
 .tabs { display:flex; overflow-x:auto; background:#1e293b; position:sticky; top:0; z-index:1000; }
 .tab { padding:12px 18px; cursor:pointer; display:flex; align-items:center; white-space:nowrap; }
@@ -21,15 +21,37 @@ header { padding:15px; text-align:center; font-size:24px; font-weight:bold; back
 @media(max-width:1024px){ .content { grid-template-columns:repeat(2,1fr); } }
 @media(max-width:800px){ .content { grid-template-columns:1fr; } }
 
-.game { background:white; color:black; padding:12px; border-radius:10px; }
+.game { background:white; color:black; padding:14px; border-radius:14px; box-shadow:0 8px 24px rgba(2,6,23,0.12); }
 
-.team-line { display:flex; align-items:center; gap:8px; font-weight:bold; }
+.team-line { display:flex; align-items:center; gap:8px; font-weight:800; font-size:16px; line-height:1.2; }
 .team-line img { width:26px; flex:0 0 auto; }
+
+.matchup-text { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.matchup-at { opacity:0.65; font-weight:700; }
+
+.details-toggle { width:100%; margin-top:10px; border:1px solid #dbe4ee; background:#f8fafc; color:#0f172a; border-radius:10px; padding:8px 10px; font-size:12px; font-weight:700; cursor:pointer; text-align:left; }
+.details-toggle:hover { background:#f1f5f9; }
+.details-panel { margin-top:8px; padding:10px; border-radius:10px; background:#f8fafc; border:1px solid #e2e8f0; display:none; }
+.details-panel.open { display:block; }
+.details-grid { display:grid; grid-template-columns:1fr; gap:8px; font-size:12px; color:#334155; }
+.details-label { font-weight:700; color:#0f172a; margin-right:4px; }
+.records-matchup { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.records-team-card { background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:10px; text-align:center; }
+.records-team-name { font-size:14px; font-weight:800; color:#0f172a; letter-spacing:0.02em; }
+.records-overall { margin-top:4px; font-size:14px; font-weight:700; color:#111827; }
+.records-split { margin-top:6px; display:inline-block; font-size:12px; font-weight:700; color:#1d4ed8; background:rgba(29,78,216,0.08); padding:3px 8px; border-radius:999px; }
+.leaders-matchup { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:2px; }
+.leaders-team-card { background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:8px; }
+.leaders-team-header { font-weight:700; color:#0f172a; margin-bottom:6px; }
+.leaders-section-title { font-size:11px; font-weight:700; color:#475569; text-transform:uppercase; letter-spacing:0.04em; margin:6px 0 4px; }
+.leader-line { margin:2px 0; }
+@media(max-width:640px){ .leaders-matchup, .records-matchup { grid-template-columns:1fr; } }
 
 .spacer { height:6px; }
 .divider { border-top:1px solid #ddd; margin:6px 0; }
 
-.status { font-size:14px; color:#333; line-height:1.45; }
+.status { font-size:13px; color:#334155; line-height:1.35; }
+.status strong { color:#111827; }
 .status small { font-size:12px; }
 .status-line {
     display:block;
@@ -41,11 +63,19 @@ header { padding:15px; text-align:center; font-size:24px; font-weight:bold; back
 
 .pitchers {
     font-size:12px;
-    color:#444;
-    margin-top:6px;
-    margin-bottom:10px;
-    line-height:1.4;
+    color:#475569;
+    margin-top:7px;
+    margin-bottom:12px;
+    line-height:1.35;
 }
+
+.score-lines {
+    margin-top:4px;
+    margin-bottom:4px;
+}
+.score-lines .score-value { font-weight:800; }
+.score-lines .top-team-name, .score-lines .top-team-score { font-size:16px; }
+.score-lines .bottom-team-name, .score-lines .bottom-team-score { font-size:14px; }
 
 @keyframes pulse {
     0% { transform:scale(1); }
@@ -62,7 +92,7 @@ header { padding:15px; text-align:center; font-size:24px; font-weight:bold; back
     animation:pulse 1s infinite;
 }
 
-.scoreboard { margin-top:8px; font-size:12px; overflow-x:auto; }
+.scoreboard { margin-top:8px; font-size:12px; overflow-x:auto; border-radius:8px; }
 .scoreboard table { width:100%; border-collapse:collapse; }
 .scoreboard th, .scoreboard td { padding:4px 6px; text-align:center; }
 .scoreboard th { border-bottom:1px solid #ccc; }
@@ -119,7 +149,7 @@ header { padding:15px; text-align:center; font-size:24px; font-weight:bold; back
     border:1px solid rgba(0,0,0,0.08);
 }
 
-/* Base runner diamond - balanced */
+/* Base runner diamond - tightened */
 .basepath-wrap {
     display:inline-flex;
     align-items:center;
@@ -144,20 +174,22 @@ header { padding:15px; text-align:center; font-size:24px; font-weight:bold; back
 }
 .base.on {
     background: #22c55e;
-    box-shadow: 0 0 6px rgba(34,197,94,0.5);
+    box-shadow: 0 0 5px rgba(34,197,94,0.4);
 }
-.base.second {
-    top: 0;
-    left: 50%;
-    transform: translateX(-50%) rotate(45deg);
-}
-.base.third  {
-    bottom: 0;
-    left: 2px;
-}
-.base.first  {
-    bottom: 0;
-    right: 2px;
+.base.second { top: 0; left: 50%; transform: translateX(-50%) rotate(45deg); }
+.base.third  { bottom: 0; left: 2px; }
+.base.first  { bottom: 0; right: 2px; }
+
+.watch-line { margin-top:8px; color:#475569; }
+
+@media(max-width:800px){
+    .game { padding:12px; border-radius:12px; }
+    .team-line { font-size:15px; }
+    .team-line img { width:22px; }
+    .score-lines .top-team-name, .score-lines .top-team-score { font-size:15px; }
+    .score-lines .bottom-team-name, .score-lines .bottom-team-score { font-size:13px; }
+    .scoreboard th, .scoreboard td { padding:3px 4px; }
+    .pitchers, .status, .details-grid { font-size:12px; }
 }
 </style>
 </head>
@@ -346,7 +378,7 @@ function getStatusText(event){
     } else if(isLive){
         inningText = event.status.type.detail || event.status.type.shortDetail || "Live";
     } else {
-        return formatGameTime(event.date);
+        return `<strong>${formatGameTime(event.date)}</strong>`;
     }
 
     if(currentLeague === "MLB" && isLive){
@@ -608,6 +640,240 @@ function updateStatusUI(gameDiv, event){
     }
 }
 
+
+function getRecordSummaryByAliases(team, aliases){
+    const records = team?.records || [];
+    const normalizedAliases = (aliases || []).map(alias => String(alias).toLowerCase());
+
+    const match = records.find(record => {
+        const fields = [record?.name, record?.type, record?.displayName, record?.abbreviation]
+            .filter(Boolean)
+            .map(value => String(value).toLowerCase());
+        return normalizedAliases.some(alias => fields.includes(alias));
+    });
+
+    return match?.summary || null;
+}
+
+function getOverallRecord(team){
+    return getRecordSummaryByAliases(team, ['overall', 'total'])
+        || team?.record?.summary
+        || team?.records?.[0]?.summary
+        || '—';
+}
+
+function getHomeRoadRecord(team, side){
+    if(side === 'home'){
+        return getRecordSummaryByAliases(team, ['home']);
+    }
+    return getRecordSummaryByAliases(team, ['road', 'away']);
+}
+
+function formatTeamRecordLine(team, side){
+    const overall = getOverallRecord(team);
+    const split = getHomeRoadRecord(team, side);
+    const splitLabel = side === 'home' ? 'At Home' : 'On The Road';
+
+    return `${team.team.abbreviation} ${overall}${split ? ` (${split} ${splitLabel})` : ''}`;
+}
+
+function buildTeamRecordCard(team, side){
+    const overall = getOverallRecord(team);
+    const split = getHomeRoadRecord(team, side);
+    const splitLabel = side === 'home' ? 'At Home' : 'On The Road';
+
+    return `
+        <div class="records-team-card">
+            <div class="records-team-name">${team.team.abbreviation}</div>
+            <div class="records-overall">${overall}</div>
+            ${split ? `<div class="records-split">${split} ${splitLabel}</div>` : ''}
+        </div>
+    `;
+}
+
+function formatLeaderCategoryName(name){
+    if(!name) return 'Leader';
+
+    const normalized = String(name)
+        .replace(/([a-z])([A-Z])/g, '$1 $2')
+        .replace(/_/g, ' ')
+        .trim()
+        .toLowerCase();
+
+    const abbreviations = {
+        'at bats': 'AB',
+        'runs': 'R',
+        'hits': 'H',
+        'runs batted in': 'RBI',
+        'rbi': 'RBI',
+        'home runs': 'HR',
+        'batting average': 'AVG',
+        'average': 'AVG',
+        'on base percentage': 'OBP',
+        'slugging percentage': 'SLG',
+        'ops': 'OPS',
+        'stolen bases': 'SB',
+        'walks': 'BB',
+        'strikeouts': 'K',
+        'innings pitched': 'IP',
+        'earned runs': 'ER',
+        'hits allowed': 'H',
+        'pitch count': 'P',
+        'pitches': 'P',
+        'wins': 'W',
+        'saves': 'SV',
+        'points': 'PTS',
+        'rebounds': 'REB',
+        'assists': 'AST',
+        'blocks': 'BLK',
+        'steals': 'STL',
+        'goals': 'G',
+        'shots on goal': 'SOG',
+        'save percentage': 'SV%',
+        'saves': 'SV',
+        'passing yards': 'Pass Yds',
+        'rushing yards': 'Rush Yds',
+        'receiving yards': 'Rec Yds',
+        'touchdowns': 'TD'
+    };
+
+    if(abbreviations[normalized]) return abbreviations[normalized];
+
+    return normalized.replace(/\w/g, ch => ch.toUpperCase());
+}
+
+function getMLBLeaderBucket(name){
+    const normalized = String(name || '').toLowerCase().replace(/_/g, ' ');
+    const pitchingTerms = ['strikeout', 'innings pitched', 'earned run', 'pitch count', 'pitches', 'save', 'win', 'era', 'whip', 'hits allowed'];
+    return pitchingTerms.some(term => normalized.includes(term)) ? 'Pitching' : 'Batting';
+}
+
+function renderLeaderLines(categories){
+    return categories.map(category => {
+        const leader = category?.leaders?.[0];
+        const playerName = leader?.athlete?.displayName || leader?.displayName || '—';
+        const stat = leader?.displayValue || '';
+        const label = formatLeaderCategoryName(category?.name);
+        if(!stat && playerName === '—') return '';
+        return `<div class="leader-line"><span class="details-label">${label}:</span>${playerName}${stat ? ` (${stat})` : ''}</div>`;
+    }).filter(Boolean).join('');
+}
+
+function getFirstMatchingLeader(categories, aliases){
+    return aliases.map(alias => String(alias).toLowerCase())
+        .map(alias => categories.find(category => String(category?.name || '').toLowerCase().replace(/_/g, ' ') === alias))
+        .find(Boolean) || null;
+}
+
+function getPreferredMLBCategories(categories){
+    const cleaned = (categories || []).filter(category => {
+        const name = String(category?.name || '').toLowerCase().replace(/_/g, ' ');
+        return name && name !== 'mlbrating' && name !== 'mlb rating' && name !== 'average' && name !== 'avg';
+    });
+
+    const preferredBatting = [
+        getFirstMatchingLeader(cleaned, ['runs', 'run']),
+        getFirstMatchingLeader(cleaned, ['hits', 'hit']),
+        getFirstMatchingLeader(cleaned, ['rbi', 'rbis', 'runs batted in']),
+        getFirstMatchingLeader(cleaned, ['home runs', 'home run', 'hr'])
+    ].filter(Boolean);
+
+    const preferredPitching = [
+        getFirstMatchingLeader(cleaned, ['innings pitched', 'ip']),
+        getFirstMatchingLeader(cleaned, ['strikeouts', 'strikeout', 'k']),
+        getFirstMatchingLeader(cleaned, ['earned runs', 'earned run', 'er'])
+    ].filter(Boolean);
+
+    const fallbackPitching = cleaned.filter(category => getMLBLeaderBucket(category?.name) === 'Pitching');
+    const fallbackBatting = cleaned.filter(category => getMLBLeaderBucket(category?.name) === 'Batting');
+
+    const uniqueByName = list => {
+        const seen = new Set();
+        return list.filter(category => {
+            const key = String(category?.name || '').toLowerCase().replace(/_/g, ' ');
+            if(!key || seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
+    };
+
+    return {
+        batting: uniqueByName([
+            ...preferredBatting,
+            ...fallbackBatting
+        ]).slice(0, 4),
+        pitching: uniqueByName([
+            ...preferredPitching,
+            ...fallbackPitching
+        ]).slice(0, 4)
+    };
+}
+
+function formatTeamLeaders(team){
+    const categories = team?.leaders || [];
+    if(!categories.length) return '';
+
+    if(currentLeague === 'MLB'){
+        const preferred = getPreferredMLBCategories(categories);
+        const battingHTML = renderLeaderLines(preferred.batting);
+        const pitchingHTML = renderLeaderLines(preferred.pitching);
+
+        if(!battingHTML && !pitchingHTML) return '';
+
+        return `
+            <div class="leaders-team-card">
+                <div class="leaders-team-header">${team.team.abbreviation}</div>
+                ${battingHTML ? `<div class="leaders-section-title">Batting</div>${battingHTML}` : ''}
+                ${pitchingHTML ? `<div class="leaders-section-title">Pitching</div>${pitchingHTML}` : ''}
+            </div>
+        `;
+    }
+
+    const leadersHTML = renderLeaderLines(categories.slice(0, 3));
+    if(!leadersHTML) return '';
+
+    return `
+        <div class="leaders-team-card">
+            <div class="leaders-team-header">${team.team.abbreviation}</div>
+            ${leadersHTML}
+        </div>
+    `;
+}
+
+function buildDetailsHTML(event, home, away){
+    const comp = event.competitions?.[0] || {};
+    const venue = comp.venue?.fullName || comp.venue?.address?.city || 'TBD';
+    const statusDetail = event.status?.type?.detail || event.status?.type?.shortDetail || 'TBD';
+    const broadcasts = (comp.broadcasts || []).flatMap(b => b.names || []).join(', ') || 'TBD';
+
+    return `
+        <div class="details-panel">
+            <div class="details-grid">
+                <div><span class="details-label">Venue:</span>${venue}</div>
+                <div><span class="details-label">Status:</span>${statusDetail}</div>
+                <div>
+                    <span class="details-label">Records:</span>
+                    <div class="records-matchup">
+                        ${buildTeamRecordCard(away, 'away')}
+                        ${buildTeamRecordCard(home, 'home')}
+                    </div>
+                </div>
+                <div><span class="details-label">Watch:</span>${broadcasts}</div>
+            </div>
+        </div>
+    `;
+}
+
+function bindDetailsToggle(gameDiv){
+    const btn = gameDiv.querySelector('.details-toggle');
+    const panel = gameDiv.querySelector('.details-panel');
+    if(!btn || !panel) return;
+    btn.addEventListener('click', () => {
+        const open = panel.classList.toggle('open');
+        btn.textContent = open ? 'Hide details ▲' : 'More details ▼';
+    });
+}
+
 function updateScoreboardTable(gameDiv, away, home){
     const newTableData = getTableData(away, home);
     let scoreboard = gameDiv.querySelector(".scoreboard");
@@ -705,8 +971,11 @@ function renderGame(event, grid){
     gameDiv.innerHTML = `
         <div class="team-line">
             ${isLive ? '<span class="live-badge">LIVE</span>' : ''}
-            <img src="${away.team.logo}" alt="${away.team.abbreviation} logo">${away.team.abbreviation} @
-            <img src="${home.team.logo}" alt="${home.team.abbreviation} logo">${home.team.abbreviation}
+            <div class="matchup-text">
+                <img src="${away.team.logo}" alt="${away.team.abbreviation} logo"><span>${away.team.abbreviation}</span>
+                <span class="matchup-at">@</span>
+                <img src="${home.team.logo}" alt="${home.team.abbreviation} logo"><span>${home.team.abbreviation}</span>
+            </div>
         </div>
 
         ${currentLeague === "MLB" ? `
@@ -722,9 +991,12 @@ function renderGame(event, grid){
         <div class="status game-status">${statusText}</div>
         ${isLive ? '<div class="divider status-divider"></div>' : ""}
         ${broadcast ? `<div class="status watch-line"><small>Watch: ${broadcast}</small></div>` : ""}
+        <button class="details-toggle" type="button">More details ▼</button>
+        ${buildDetailsHTML(event, home, away)}
     `;
 
     grid.appendChild(gameDiv);
+    bindDetailsToggle(gameDiv);
     gameStateMap[event.id] = buildGameState(event);
 }
 
