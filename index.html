@@ -37,6 +37,7 @@ header { padding:15px; text-align:center; font-size:24px; font-weight:bold; back
 .details-label { font-weight:700; color:#0f172a; margin-right:4px; }
 .records-matchup { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
 .records-team-card {
+    text-align:center;
     background:#ffffff;
     border:1px solid #e2e8f0;
     border-radius:10px;
@@ -48,13 +49,25 @@ header { padding:15px; text-align:center; font-size:24px; font-weight:bold; back
     text-align:center;
 }
 
-.records-team-card .form-pill,
 .records-team-card .form-text {
-    display:flex;
+    display:block;
+    text-align:center;
+}
+
+.records-team-card .form-pill {
+    display:inline-flex;
+    width:22px;
+    height:22px;
+    line-height:22px;
+    text-align:center;
+    font-size:11px;
+    font-weight:800;
+    border-radius:50%;
+    margin:2px;
+    color:white;
     justify-content:center;
     align-items:center;
-    flex-wrap:wrap;
-    gap:4px;
+    vertical-align:middle;
 }
 .records-team-name { font-size:14px; font-weight:800; color:#0f172a; letter-spacing:0.02em; }
 .records-overall { margin-top:4px; font-size:14px; font-weight:700; color:#111827; }
@@ -264,6 +277,39 @@ header { padding:15px; text-align:center; font-size:24px; font-weight:bold; back
     .scoreboard th, .scoreboard td { padding:3px 4px; }
     .pitchers, .status, .details-grid { font-size:12px; }
 }
+
+.form-text {
+    font-weight:800;
+    margin-bottom:6px;
+}
+
+.form-split {
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    gap:4px;
+}
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    gap:4px;
+}
+
+.form-split-label {
+    font-size:11px;
+    font-weight:700;
+    color:#64748b;
+}
+
+.form-pill-row {
+    display:flex;
+    flex-direction:row;
+    justify-content:center;
+    align-items:center;
+    flex-wrap:nowrap;
+    gap:4px;
+}
+
 </style>
 </head>
 
@@ -299,6 +345,8 @@ let gameStateMap = {};
 let refreshInFlight = false;
 let mlbPitcherMetaCache = {};
 let nhlGoalieCache = {};
+let nhlGoalieCacheTime = 0;
+let leagueFormCache = {};
 let teamFormCache = {};
 let teamSplitFormCache = { home: {}, away: {} };
 
@@ -653,18 +701,27 @@ function parseDailyFantasyFuelGoalies(text){
     return data;
 }
 
-async function fetchNHLGoalies(){
+async function fetchNHLGoalies(forceRefresh = false){
     if(currentLeague !== "NHL"){
-        nhlGoalieCache = {};
+        return;
+    }
+
+    const now = Date.now();
+    const cacheIsFresh = nhlGoalieCacheTime && (now - nhlGoalieCacheTime < 5 * 60 * 1000) && Object.keys(nhlGoalieCache || {}).length;
+
+    if(!forceRefresh && cacheIsFresh){
         return;
     }
 
     try {
         const text = await fetchTextWithFallback('https://www.dailyfantasyfuel.com/nhl/starting-goalies/');
         nhlGoalieCache = parseDailyFantasyFuelGoalies(text);
+        nhlGoalieCacheTime = Date.now();
     } catch (err) {
         console.error('NHL goalie fetch failed:', err);
-        nhlGoalieCache = {};
+        if(!Object.keys(nhlGoalieCache || {}).length){
+            nhlGoalieCache = {};
+        }
     }
 }
 
@@ -1169,14 +1226,22 @@ function formatTeamRecordLine(team, side){
 
 function buildTeamRecordCard(team, side){
     const overall = getOverallRecord(team);
-    const split = getHomeRoadRecord(team, side);
-    const splitLabel = side === 'home' ? 'At Home' : 'On The Road';
+    const homeRecord = getHomeRoadRecord(team, 'home');
+    const awayRecord = getHomeRoadRecord(team, 'away');
+
+    const isAwayTeam = side === 'away';
 
     return `
         <div class="records-team-card">
             <div class="records-team-name">${team.team.displayName}</div>
             <div class="records-overall">${overall}</div>
-            ${split ? `<div class="records-split">${split} ${splitLabel}</div>` : ''}
+
+            ${isAwayTeam
+                ? `${awayRecord ? `<div class="records-split">${awayRecord} On The Road</div>` : ''}
+                   ${homeRecord ? `<div class="records-split">${homeRecord} At Home</div>` : ''}`
+                : `${homeRecord ? `<div class="records-split">${homeRecord} At Home</div>` : ''}
+                   ${awayRecord ? `<div class="records-split">${awayRecord} On The Road</div>` : ''}`
+            }
         </div>
     `;
 }
@@ -1470,6 +1535,25 @@ function updateScoreboardTable(gameDiv, away, home){
     animateChangedValue(homeRow.querySelector(`td[data-col-key="total"]`), newTableData.home.total ?? "");
 }
 
+
+function refreshVisibleNHLGoalies(){
+    if(currentLeague !== "NHL") return;
+
+    document.querySelectorAll('.game[data-event-id]').forEach(gameDiv => {
+        const awayAbbr = gameDiv.dataset.awayAbbr;
+        const homeAbbr = gameDiv.dataset.homeAbbr;
+        const awayName = gameDiv.dataset.awayName;
+        const homeName = gameDiv.dataset.homeName;
+        if(!awayAbbr || !homeAbbr || !awayName || !homeName) return;
+
+        enhanceNHLGoaliesUI(gameDiv, {
+            team: { abbreviation: awayAbbr, displayName: awayName }
+        }, {
+            team: { abbreviation: homeAbbr, displayName: homeName }
+        });
+    });
+}
+
 function renderGame(event, grid){
     const comp = event.competitions[0];
     const home = comp.competitors.find(t => t.homeAway === "home");
@@ -1501,6 +1585,10 @@ function renderGame(event, grid){
     const gameDiv = document.createElement("div");
     gameDiv.className = "game";
     gameDiv.dataset.eventId = event.id;
+    gameDiv.dataset.awayAbbr = away.team.abbreviation;
+    gameDiv.dataset.homeAbbr = home.team.abbreviation;
+    gameDiv.dataset.awayName = away.team.displayName;
+    gameDiv.dataset.homeName = home.team.displayName;
 
     gameDiv.innerHTML = `
         <div class="team-line">
@@ -1556,11 +1644,12 @@ function renderGame(event, grid){
 async function loadGames(){
     containerDiv.innerHTML = "";
     gameStateMap = {};
-    teamFormCache = {};
-    teamSplitFormCache = { home: {}, away: {} };
 
     await fetchLeagueRecentForm();
-    await fetchNHLGoalies();
+
+    const goaliePromise = currentLeague === "NHL"
+        ? fetchNHLGoalies()
+        : Promise.resolve();
 
     const endpoint = leagues[currentLeague];
     const offsets = [0, 1, -1];
@@ -1624,6 +1713,14 @@ async function loadGames(){
             .sort((a,b) => new Date(a.date) - new Date(b.date))
             .forEach(e => renderGame(e, grid));
     });
+
+    if(currentLeague === "NHL"){
+        goaliePromise.then(() => {
+            if(currentLeague === "NHL"){
+                refreshVisibleNHLGoalies();
+            }
+        }).catch(err => console.error('Delayed goalie refresh failed:', err));
+    }
 }
 
 async function fetchEventsForRefresh(){
@@ -1651,6 +1748,9 @@ async function refreshLiveGames(){
     refreshInFlight = true;
 
     try {
+        if(currentLeague === "NHL"){
+            fetchNHLGoalies().then(() => refreshVisibleNHLGoalies()).catch(() => {});
+        }
         const events = await fetchEventsForRefresh();
         let requiresReload = false;
         let liveGameJustStarted = false;
