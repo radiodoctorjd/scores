@@ -40,6 +40,14 @@ header { padding:15px; text-align:center; font-size:24px; font-weight:bold; back
 .records-team-name { font-size:14px; font-weight:800; color:#0f172a; letter-spacing:0.02em; }
 .records-overall { margin-top:4px; font-size:14px; font-weight:700; color:#111827; }
 .records-split { margin-top:6px; display:inline-block; font-size:12px; font-weight:700; color:#1d4ed8; background:rgba(29,78,216,0.08); padding:3px 8px; border-radius:999px; }
+.form-lines { display:flex; flex-direction:column; align-items:center; gap:6px; margin-top:6px; }
+.form-line { display:flex; align-items:center; justify-content:center; flex-wrap:wrap; gap:4px; font-size:11px; color:#475569; }
+.form-line-label { font-weight:700; color:#0f172a; min-width:48px; text-align:right; }
+.form-pill { display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; border-radius:999px; font-size:11px; font-weight:800; color:#fff; }
+.form-pill.win { background:#16a34a; box-shadow:0 0 6px rgba(22,163,74,0.25); }
+.form-pill.loss { background:#dc2626; box-shadow:0 0 6px rgba(220,38,38,0.2); }
+.form-pill.neutral { background:#64748b; }
+.form-empty { color:#94a3b8; font-weight:700; }
 .leaders-matchup { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:2px; }
 .leaders-team-card { background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:8px; }
 .leaders-team-header { font-weight:700; color:#0f172a; margin-bottom:6px; }
@@ -225,6 +233,8 @@ const containerDiv = document.getElementById("content-container");
 let gameStateMap = {};
 let refreshInFlight = false;
 let mlbPitcherMetaCache = {};
+let teamFormCache = {};
+let teamSplitFormCache = { home: {}, away: {} };
 
 Object.keys(leagues).forEach(l => {
     const tab = document.createElement("div");
@@ -375,6 +385,95 @@ async function fetchTextWithFallback(url){
         } catch (err) {}
     }
     return "";
+}
+
+
+function getWinnerAbbreviation(event){
+    const comp = event?.competitions?.[0];
+    const competitors = comp?.competitors || [];
+    if(!competitors.length) return null;
+
+    const withWinnerFlag = competitors.find(team => team?.winner === true);
+    if(withWinnerFlag?.team?.abbreviation) return withWinnerFlag.team.abbreviation;
+
+    const scored = competitors.filter(team => team?.score != null);
+    if(scored.length >= 2){
+        const sorted = [...scored].sort((a, b) => Number(b.score) - Number(a.score));
+        if(Number(sorted[0]?.score) !== Number(sorted[1]?.score)){
+            return sorted[0]?.team?.abbreviation || null;
+        }
+    }
+
+    return null;
+}
+
+function getTeamRecentForm(teamAbbr){
+    return teamFormCache[teamAbbr] || '—';
+}
+
+function getTeamSplitForm(teamAbbr, side){
+    return teamSplitFormCache?.[side]?.[teamAbbr] || '—';
+}
+
+async function fetchLeagueRecentForm(){
+    const sportPath = leagues[currentLeague];
+    if(!sportPath) return;
+
+    const seasonType = currentLeague === 'NFL' ? 2 : 2;
+    const groups = currentLeague === 'NCAAMB' ? '&groups=50' : '';
+    const url = `https://site.api.espn.com/apis/site/v2/sports/${sportPath}/scoreboard?limit=300&dates=${getDate(-30)}-${getDate(0)}&seasontype=${seasonType}${groups}`;
+
+    try {
+        const res = await fetchWithTimeout(url, 8000);
+        if(!res.ok) return;
+        const data = await res.json();
+        const events = Array.isArray(data?.events) ? data.events : [];
+        const overallFormMap = {};
+        const splitFormMap = { home: {}, away: {} };
+
+        events
+            .filter(event => event?.status?.type?.completed)
+            .sort((a, b) => new Date(b.date) - new Date(a.date))
+            .forEach(event => {
+                const winnerAbbr = getWinnerAbbreviation(event);
+                const competitors = event?.competitions?.[0]?.competitors || [];
+
+                competitors.forEach(team => {
+                    const abbr = team?.team?.abbreviation;
+                    const side = team?.homeAway;
+                    if(!abbr) return;
+
+                    const result = winnerAbbr
+                        ? (winnerAbbr === abbr ? 'W' : 'L')
+                        : '—';
+
+                    if(!overallFormMap[abbr]) overallFormMap[abbr] = [];
+                    if(overallFormMap[abbr].length < 5){
+                        overallFormMap[abbr].push(result);
+                    }
+
+                    if(side === 'home' || side === 'away'){
+                        if(!splitFormMap[side][abbr]) splitFormMap[side][abbr] = [];
+                        if(splitFormMap[side][abbr].length < 5){
+                            splitFormMap[side][abbr].push(result);
+                        }
+                    }
+                });
+            });
+
+        Object.keys(overallFormMap).forEach(abbr => {
+            teamFormCache[abbr] = overallFormMap[abbr].join('-');
+        });
+
+        teamSplitFormCache = { home: {}, away: {} };
+        ['home', 'away'].forEach(side => {
+            Object.keys(splitFormMap[side]).forEach(abbr => {
+                teamSplitFormCache[side][abbr] = splitFormMap[side][abbr].join('-');
+            });
+        });
+    } catch (err) {
+        console.error('Recent form fetch failed:', err);
+    }
 }
 
 function isLikelyGoalieName(line){
@@ -962,6 +1061,43 @@ function formatTeamLeaders(team){
     `;
 }
 
+function formatFormPills(formString){
+    if(!formString || formString === '—') return '<span class="form-empty">—</span>';
+
+    return formString.split('-').filter(Boolean).map(result => {
+        const value = result.toUpperCase();
+        const className = value === 'W' ? 'win' : (value === 'L' ? 'loss' : 'neutral');
+        return `<span class="form-pill ${className}">${value}</span>`;
+    }).join('');
+}
+
+function buildFormLine(label, formString){
+    return `
+        <div class="form-line">
+            <span class="form-line-label">${label}:</span>
+            <span>${formatFormPills(formString)}</span>
+        </div>
+    `;
+}
+
+function buildFormCard(team, side){
+    const abbr = team.team.abbreviation;
+    const overall = getTeamRecentForm(abbr);
+    const split = getTeamSplitForm(abbr, side);
+    const splitLabel = side === 'home' ? 'Home' : 'Road';
+
+    return `
+        <div class="records-team-card">
+            <div class="records-team-name">${team.team.displayName}</div>
+            <div class="form-lines">
+                ${buildFormLine('Last 5', overall)}
+                ${buildFormLine(splitLabel, split)}
+            </div>
+            <div class="records-split">Current Form</div>
+        </div>
+    `;
+}
+
 function buildDetailsHTML(event, home, away){
     const comp = event.competitions?.[0] || {};
     const venue = comp.venue?.fullName || comp.venue?.address?.city || 'TBD';
@@ -978,6 +1114,13 @@ function buildDetailsHTML(event, home, away){
                     <div class="records-matchup">
                         ${buildTeamRecordCard(away, 'away')}
                         ${buildTeamRecordCard(home, 'home')}
+                    </div>
+                </div>
+                <div>
+                    <span class="details-label">Current Form:</span>
+                    <div class="records-matchup">
+                        ${buildFormCard(away, 'away')}
+                        ${buildFormCard(home, 'home')}
                     </div>
                 </div>
                 <div><span class="details-label">Watch:</span>${broadcasts}</div>
@@ -1136,6 +1279,10 @@ function renderGame(event, grid){
 async function loadGames(){
     containerDiv.innerHTML = "";
     gameStateMap = {};
+    teamFormCache = {};
+    teamSplitFormCache = { home: {}, away: {} };
+
+    await fetchLeagueRecentForm();
 
     const endpoint = leagues[currentLeague];
     const offsets = [0, 1, -1];
