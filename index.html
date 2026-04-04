@@ -36,7 +36,26 @@ header { padding:15px; text-align:center; font-size:24px; font-weight:bold; back
 .details-grid { display:grid; grid-template-columns:1fr; gap:8px; font-size:12px; color:#334155; }
 .details-label { font-weight:700; color:#0f172a; margin-right:4px; }
 .records-matchup { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
-.records-team-card { background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:10px; text-align:center; }
+.records-team-card {
+    background:#ffffff;
+    border:1px solid #e2e8f0;
+    border-radius:10px;
+    padding:10px;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    text-align:center;
+}
+
+.records-team-card .form-pill,
+.records-team-card .form-text {
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    flex-wrap:wrap;
+    gap:4px;
+}
 .records-team-name { font-size:14px; font-weight:800; color:#0f172a; letter-spacing:0.02em; }
 .records-overall { margin-top:4px; font-size:14px; font-weight:700; color:#111827; }
 .records-split { margin-top:6px; display:inline-block; font-size:12px; font-weight:700; color:#1d4ed8; background:rgba(29,78,216,0.08); padding:3px 8px; border-radius:999px; }
@@ -75,6 +94,52 @@ header { padding:15px; text-align:center; font-size:24px; font-weight:bold; back
     margin-top:7px;
     margin-bottom:12px;
     line-height:1.35;
+}
+.goalie-line {
+    display:flex;
+    align-items:center;
+    gap:6px;
+    flex-wrap:wrap;
+    margin:2px 0;
+}
+.goalie-line .goalie-text {
+    display:inline;
+}
+.goalie-line.goalie-advantage .goalie-text {
+    font-weight:normal;
+    color:inherit;
+}
+.status-badge {
+    display:inline-block;
+    font-size:10px;
+    font-weight:800;
+    padding:2px 7px;
+    border-radius:999px;
+    letter-spacing:0.02em;
+    line-height:1.2;
+}
+.status-badge.confirmed {
+    background:rgba(22,163,74,0.14);
+    color:#15803d;
+}
+.status-badge.expected,
+.status-badge.projected,
+.status-badge.likely {
+    background:rgba(245,158,11,0.16);
+    color:#b45309;
+}
+.status-badge.unconfirmed {
+    background:rgba(100,116,139,0.16);
+    color:#475569;
+}
+.goalie-edge {
+    display:inline-block;
+    font-size:10px;
+    font-weight:800;
+    padding:2px 7px;
+    border-radius:999px;
+    background:rgba(59,130,246,0.12);
+    color:#1d4ed8;
 }
 
 .score-lines {
@@ -233,6 +298,7 @@ const containerDiv = document.getElementById("content-container");
 let gameStateMap = {};
 let refreshInFlight = false;
 let mlbPitcherMetaCache = {};
+let nhlGoalieCache = {};
 let teamFormCache = {};
 let teamSplitFormCache = { home: {}, away: {} };
 
@@ -475,6 +541,209 @@ async function fetchLeagueRecentForm(){
         console.error('Recent form fetch failed:', err);
     }
 }
+
+
+function normalizeGoalieTeamToken(value){
+    return String(value || '')
+        .normalize('NFKD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .replace(/&/g, 'and')
+        .replace(/[^a-z0-9]/g, '');
+}
+
+function normalizeGoalieStatus(value){
+    const cleaned = String(value || '')
+        .replace(/[✓✔]/g, '')
+        .trim()
+        .toUpperCase();
+
+    if(cleaned === 'CONFIRMED') return 'Confirmed';
+    if(cleaned === 'UNCONFIRMED') return 'Unconfirmed';
+    if(cleaned === 'EXPECTED') return 'Expected';
+    if(cleaned === 'PROJECTED') return 'Projected';
+    if(cleaned === 'LIKELY') return 'Likely';
+    return cleaned ? cleaned[0] + cleaned.slice(1).toLowerCase() : '';
+}
+
+function extractGoalieName(line){
+    const raw = String(line || '').trim();
+    if(!raw) return '';
+
+    const stripped = raw.replace(/\s+\d{1,2}-\d{1,2}-\d{1,2}.*$/,'').trim();
+    if(/^[A-Z][A-Za-z.\-']+(?:\s+[A-Z][A-Za-z.\-']+){1,3}$/.test(stripped)){
+        return stripped;
+    }
+
+    const match = raw.match(/([A-Z][A-Za-z.\-']+(?:\s+[A-Z][A-Za-z.\-']+){1,3})/);
+    return match ? match[1].trim() : '';
+}
+
+function parseDailyFantasyFuelGoalies(text){
+    const normalized = String(text || '')
+        .replace(/\r/g, '\n')
+        .replace(/\u00a0/g, ' ')
+        .replace(/[ \t]+/g, ' ')
+        .replace(/\n{3,}/g, '\n\n');
+
+    const lines = normalized.split('\n').map(line => line.trim()).filter(Boolean);
+    const data = {};
+
+    for(let i = 0; i < lines.length; i++){
+        const line = lines[i];
+
+        const matchupMatch = line.match(/^[A-Za-z]{3},.*?([A-Za-z .'\-]+)\s+vs\s+([A-Za-z .'\-]+)$/i);
+        if(!matchupMatch) continue;
+
+        const homeTeam = matchupMatch[1].trim();
+        const awayTeam = matchupMatch[2].trim();
+        const key = `${normalizeGoalieTeamToken(awayTeam)}@${normalizeGoalieTeamToken(homeTeam)}`;
+
+        const goalies = [];
+        let j = i + 1;
+
+        while(j < lines.length && goalies.length < 2){
+            const current = lines[j];
+
+            if(/^[A-Za-z]{3},.*?\svs\s/i.test(current) || /^[A-Z][A-Z .'\-]+ VS [A-Z][A-Z .'\-]+$/.test(current)){
+                if(goalies.length) break;
+                j++;
+                continue;
+            }
+
+            const status = normalizeGoalieStatus(current);
+            if(['Confirmed', 'Unconfirmed', 'Expected', 'Projected', 'Likely'].includes(status)){
+                let name = '';
+                for(let k = j - 1; k >= Math.max(i + 1, j - 4); k--){
+                    name = extractGoalieName(lines[k]);
+                    if(name) break;
+                }
+
+                let record = '';
+                let gaa = '';
+                let svPct = '';
+
+                for(let k = j + 1; k < Math.min(j + 14, lines.length); k++){
+                    const probe = lines[k];
+                    if(/^RECORD$/i.test(probe) && k > j + 0) record = lines[k - 1];
+                    if(/^GAA$/i.test(probe) && k > j + 0) gaa = lines[k - 1];
+                    if(/^SV PCT$/i.test(probe) && k > j + 0) svPct = lines[k - 1];
+
+                    if(record && gaa && svPct) break;
+                }
+
+                if(name){
+                    goalies.push({ name, status, record, gaa, svPct });
+                }
+            }
+
+            j++;
+        }
+
+        if(goalies.length){
+            data[key] = {
+                away: goalies[1] || null,
+                home: goalies[0] || null
+            };
+        }
+
+        i = Math.max(i, j - 1);
+    }
+
+    return data;
+}
+
+async function fetchNHLGoalies(){
+    if(currentLeague !== "NHL"){
+        nhlGoalieCache = {};
+        return;
+    }
+
+    try {
+        const text = await fetchTextWithFallback('https://www.dailyfantasyfuel.com/nhl/starting-goalies/');
+        nhlGoalieCache = parseDailyFantasyFuelGoalies(text);
+    } catch (err) {
+        console.error('NHL goalie fetch failed:', err);
+        nhlGoalieCache = {};
+    }
+}
+
+function formatGoalie(goalie, omitStatus){
+    if(!goalie || !goalie.name) return 'TBD';
+
+    const parts = [];
+    if(goalie.record) parts.push(goalie.record);
+    if(goalie.gaa) parts.push(`${goalie.gaa} GAA`);
+    if(goalie.svPct) parts.push(`${goalie.svPct} SV%`);
+
+    const statText = parts.length ? ` (${parts.join(', ')})` : '';
+    const statusText = (!omitStatus && goalie.status) ? ` · ${goalie.status}` : '';
+    return `${goalie.name}${statText}${statusText}`;
+}
+
+
+function goalieStrengthScore(goalie){
+    if(!goalie || !goalie.name) return null;
+
+    const gaa = parseFloat(String(goalie.gaa || '').replace(/[^\d.]/g, ''));
+    const svPctRaw = String(goalie.svPct || '').trim();
+    let svPct = parseFloat(svPctRaw.replace(/[^\d.]/g, ''));
+    if(!Number.isNaN(svPct) && svPct > 1.5){
+        svPct = svPct / 1000;
+    }
+
+    let score = 0;
+    let parts = 0;
+
+    if(!Number.isNaN(gaa)){
+        score += Math.max(0, 5 - gaa) * 25;
+        parts += 1;
+    }
+
+    if(!Number.isNaN(svPct)){
+        score += Math.max(0, (svPct - 0.850)) * 1000;
+        parts += 1;
+    }
+
+    return parts ? score : null;
+}
+
+function getGoalieAdvantage(goalieA, goalieB){
+    const scoreA = goalieStrengthScore(goalieA);
+    const scoreB = goalieStrengthScore(goalieB);
+
+    if(scoreA == null || scoreB == null) return null;
+    if(Math.abs(scoreA - scoreB) < 8) return 'Even';
+    return scoreA > scoreB ? 'A' : 'B';
+}
+
+function buildGoalieLineHTML(teamAbbr, goalie, isAdvantage){
+    const badgeClass = String(goalie?.status || '').toLowerCase();
+    const badgeText = goalie?.status || '';
+    const badgeHTML = badgeText ? `<span class="status-badge ${badgeClass}">${badgeText}</span>` : '';
+    const edgeHTML = isAdvantage ? `<span class="goalie-edge">Edge</span>` : '';
+    return `
+        <div class="goalie-line ${isAdvantage ? 'goalie-advantage' : ''}">
+            <span class="goalie-text">${teamAbbr}: ${formatGoalie(goalie, true)}</span>
+            ${badgeHTML}
+            ${edgeHTML}
+        </div>
+    `;
+}
+
+function enhanceNHLGoaliesUI(gameDiv, awayTeam, homeTeam){
+    const awayEl = gameDiv.querySelector('.goalie-away');
+    const homeEl = gameDiv.querySelector('.goalie-home');
+    if(!awayEl || !homeEl) return;
+
+    const key = `${normalizeGoalieTeamToken(awayTeam?.team?.displayName)}@${normalizeGoalieTeamToken(homeTeam?.team?.displayName)}`;
+    const goalieData = nhlGoalieCache[key] || null;
+
+    const advantage = getGoalieAdvantage(goalieData?.away || null, goalieData?.home || null);
+    awayEl.innerHTML = buildGoalieLineHTML(awayTeam.team.abbreviation, goalieData?.away || null, advantage === 'A');
+    homeEl.innerHTML = buildGoalieLineHTML(homeTeam.team.abbreviation, goalieData?.home || null, advantage === 'B');
+}
+
 
 function isLikelyGoalieName(line){
     const s = String(line || '').trim();
@@ -1247,6 +1516,10 @@ function renderGame(event, grid){
         <div class="pitchers">
             <div class="pitcher-away">${away.team.abbreviation}: ${formatPitcher(away.probables?.[0])}</div>
             <div class="pitcher-home">${home.team.abbreviation}: ${formatPitcher(home.probables?.[0])}</div>
+        </div>` : currentLeague === "NHL" && !isFinal ? `
+        <div class="pitchers">
+            <div class="goalie-away"></div>
+            <div class="goalie-home"></div>
         </div>` : ""}
 
         ${scoreHTML}
@@ -1273,6 +1546,10 @@ function renderGame(event, grid){
         ).catch(err => console.error("MLB pitcher enhancement failed:", err));
     }
 
+    if(currentLeague === "NHL"){
+        enhanceNHLGoaliesUI(gameDiv, away, home);
+    }
+
     gameStateMap[event.id] = buildGameState(event);
 }
 
@@ -1283,6 +1560,7 @@ async function loadGames(){
     teamSplitFormCache = { home: {}, away: {} };
 
     await fetchLeagueRecentForm();
+    await fetchNHLGoalies();
 
     const endpoint = leagues[currentLeague];
     const offsets = [0, 1, -1];
