@@ -19,6 +19,42 @@ header { padding:15px; text-align:center; font-size:24px; font-weight:bold; back
 
 .content { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; padding:20px; }
 @media(max-width:1024px){ .content { grid-template-columns:repeat(2,1fr); } }
+
+.environment-line {
+    margin-top:2px;
+    color:#334155;
+}
+
+.environment-pill {
+    display:inline-block;
+    font-size:12px;
+    font-weight:700;
+    padding:4px 8px;
+    border-radius:999px;
+    background:rgba(15,23,42,0.06);
+    color:#0f172a;
+    margin-top:2px;
+}
+
+.environment-pill.outdoor {
+    background:rgba(14,165,233,0.10);
+    color:#0369a1;
+}
+
+.environment-pill.retractable {
+    background:rgba(245,158,11,0.14);
+    color:#b45309;
+}
+
+.environment-pill.fixed {
+    background:rgba(99,102,241,0.12);
+    color:#4338ca;
+}
+
+.environment-loading {
+    color:#64748b;
+}
+
 @media(max-width:800px){ .content { grid-template-columns:1fr; } }
 
 .game { background:white; color:black; padding:14px; border-radius:14px; box-shadow:0 8px 24px rgba(2,6,23,0.12); }
@@ -268,6 +304,42 @@ header { padding:15px; text-align:center; font-size:24px; font-weight:bold; back
 
 .watch-line { margin-top:8px; color:#475569; }
 
+
+.environment-line {
+    margin-top:2px;
+    color:#334155;
+}
+
+.environment-pill {
+    display:inline-block;
+    font-size:12px;
+    font-weight:700;
+    padding:4px 8px;
+    border-radius:999px;
+    background:rgba(15,23,42,0.06);
+    color:#0f172a;
+    margin-top:2px;
+}
+
+.environment-pill.outdoor {
+    background:rgba(14,165,233,0.10);
+    color:#0369a1;
+}
+
+.environment-pill.retractable {
+    background:rgba(245,158,11,0.14);
+    color:#b45309;
+}
+
+.environment-pill.fixed {
+    background:rgba(99,102,241,0.12);
+    color:#4338ca;
+}
+
+.environment-loading {
+    color:#64748b;
+}
+
 @media(max-width:800px){
     .game { padding:12px; border-radius:12px; }
     .team-line { font-size:15px; }
@@ -346,6 +418,7 @@ let refreshInFlight = false;
 let mlbPitcherMetaCache = {};
 let nhlGoalieCache = {};
 let nhlGoalieCacheTime = 0;
+let mlbEnvironmentCache = {};
 let leagueFormCache = {};
 let teamFormCache = {};
 let teamSplitFormCache = { home: {}, away: {} };
@@ -799,6 +872,259 @@ function enhanceNHLGoaliesUI(gameDiv, awayTeam, homeTeam){
     const advantage = getGoalieAdvantage(goalieData?.away || null, goalieData?.home || null);
     awayEl.innerHTML = buildGoalieLineHTML(awayTeam.team.abbreviation, goalieData?.away || null, advantage === 'A');
     homeEl.innerHTML = buildGoalieLineHTML(homeTeam.team.abbreviation, goalieData?.home || null, advantage === 'B');
+}
+
+
+
+const mlbVenueMeta = {
+    ARI: { roofType: 'retractable', roofLabel: 'Retractable Roof', lat: 33.4455, lon: -112.0667, fieldBearing: 20 },
+    ATL: { roofType: 'outdoor', roofLabel: 'Open Air', lat: 33.8907, lon: -84.4677, fieldBearing: 25 },
+    BAL: { roofType: 'outdoor', roofLabel: 'Open Air', lat: 39.2839, lon: -76.6217, fieldBearing: 50 },
+    BOS: { roofType: 'outdoor', roofLabel: 'Open Air', lat: 42.3467, lon: -71.0972, fieldBearing: 55 },
+    CHC: { roofType: 'outdoor', roofLabel: 'Open Air', lat: 41.9484, lon: -87.6553, fieldBearing: 45 },
+    CIN: { roofType: 'outdoor', roofLabel: 'Open Air', lat: 39.0979, lon: -84.5081, fieldBearing: 55 },
+    CLE: { roofType: 'outdoor', roofLabel: 'Open Air', lat: 41.4962, lon: -81.6852, fieldBearing: 40 },
+    COL: { roofType: 'outdoor', roofLabel: 'Open Air', lat: 39.7561, lon: -104.9942, fieldBearing: 35 },
+    CWS: { roofType: 'outdoor', roofLabel: 'Open Air', lat: 41.83, lon: -87.6338, fieldBearing: 55 },
+    DET: { roofType: 'outdoor', roofLabel: 'Open Air', lat: 42.339, lon: -83.0485, fieldBearing: 30 },
+    HOU: { roofType: 'retractable', roofLabel: 'Retractable Roof', lat: 29.7573, lon: -95.3555, fieldBearing: 20 },
+    KC: { roofType: 'outdoor', roofLabel: 'Open Air', lat: 39.0517, lon: -94.4803, fieldBearing: 40 },
+    LAA: { roofType: 'outdoor', roofLabel: 'Open Air', lat: 33.8003, lon: -117.8827, fieldBearing: 30 },
+    LAD: { roofType: 'outdoor', roofLabel: 'Open Air', lat: 34.0739, lon: -118.24, fieldBearing: 35 },
+    MIA: { roofType: 'retractable', roofLabel: 'Retractable Roof', lat: 25.7781, lon: -80.2197, fieldBearing: 35 },
+    MIL: { roofType: 'retractable', roofLabel: 'Retractable Roof', lat: 43.028, lon: -87.9712, fieldBearing: 25 },
+    MIN: { roofType: 'outdoor', roofLabel: 'Open Air', lat: 44.9817, lon: -93.2776, fieldBearing: 40 },
+    NYM: { roofType: 'outdoor', roofLabel: 'Open Air', lat: 40.7571, lon: -73.8458, fieldBearing: 35 },
+    NYY: { roofType: 'outdoor', roofLabel: 'Open Air', lat: 40.8296, lon: -73.9262, fieldBearing: 50 },
+    OAK: { roofType: 'outdoor', roofLabel: 'Open Air', lat: 38.2579, lon: -121.9454, fieldBearing: 40 },
+    PHI: { roofType: 'outdoor', roofLabel: 'Open Air', lat: 39.9061, lon: -75.1665, fieldBearing: 35 },
+    PIT: { roofType: 'outdoor', roofLabel: 'Open Air', lat: 40.4469, lon: -80.0057, fieldBearing: 35 },
+    SD: { roofType: 'outdoor', roofLabel: 'Open Air', lat: 32.7076, lon: -117.157, fieldBearing: 35 },
+    SEA: { roofType: 'retractable', roofLabel: 'Retractable Roof', lat: 47.5914, lon: -122.3325, fieldBearing: 0 },
+    SF: { roofType: 'outdoor', roofLabel: 'Open Air', lat: 37.7786, lon: -122.3893, fieldBearing: 60 },
+    STL: { roofType: 'outdoor', roofLabel: 'Open Air', lat: 38.6226, lon: -90.1928, fieldBearing: 35 },
+    TB: { roofType: 'fixed', roofLabel: 'Fixed Roof', lat: 27.7682, lon: -82.6534, fieldBearing: 40 },
+    TEX: { roofType: 'retractable', roofLabel: 'Retractable Roof', lat: 32.7473, lon: -97.0842, fieldBearing: 40 },
+    TOR: { roofType: 'retractable', roofLabel: 'Retractable Roof', lat: 43.6414, lon: -79.3894, fieldBearing: 35 },
+    WSH: { roofType: 'outdoor', roofLabel: 'Open Air', lat: 38.873, lon: -77.0074, fieldBearing: 25 }
+};
+
+function getMLBVenueMeta(homeTeam){
+    const abbr = homeTeam?.team?.abbreviation;
+    return mlbVenueMeta[abbr] || null;
+}
+
+function getWeatherDescription(code){
+    const map = {
+        0: 'Clear',
+        1: 'Mostly Clear',
+        2: 'Partly Cloudy',
+        3: 'Overcast',
+        45: 'Fog',
+        48: 'Fog',
+        51: 'Light Drizzle',
+        53: 'Drizzle',
+        55: 'Heavy Drizzle',
+        61: 'Light Rain',
+        63: 'Rain',
+        65: 'Heavy Rain',
+        71: 'Light Snow',
+        73: 'Snow',
+        75: 'Heavy Snow',
+        80: 'Rain Showers',
+        81: 'Rain Showers',
+        82: 'Heavy Showers',
+        95: 'Thunderstorms',
+        96: 'Thunderstorms',
+        99: 'Strong Storms'
+    };
+    return map[Number(code)] || 'Forecast';
+}
+
+function getCompassDirectionLabel(degrees){
+    const val = Number(degrees);
+    if(Number.isNaN(val)) return '';
+    const dirs = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+    return dirs[Math.round(val / 22.5) % 16];
+}
+
+function normalizeDegrees(value){
+    let deg = Number(value);
+    if(Number.isNaN(deg)) return null;
+    deg = deg % 360;
+    if(deg < 0) deg += 360;
+    return deg;
+}
+
+function smallestAngleDifference(a, b){
+    const diff = Math.abs(a - b) % 360;
+    return diff > 180 ? 360 - diff : diff;
+}
+
+function getStadiumFieldWindDirection(windFromDegrees, fieldBearingDegrees){
+    const windFrom = normalizeDegrees(windFromDegrees);
+    const fieldBearing = normalizeDegrees(fieldBearingDegrees);
+    if(windFrom == null || fieldBearing == null) return '';
+
+    // Convert "wind from" meteorological direction into where the wind is blowing TO.
+    const windTo = normalizeDegrees(windFrom + 180);
+    const delta = normalizeDegrees(windTo - fieldBearing);
+
+    if(delta == null) return '';
+
+    // 0 = out to CF, 180 = in to home plate, 90 = to LF, 270 = to RF
+    if(delta < 22.5 || delta >= 337.5) return 'out to center field';
+    if(delta >= 22.5 && delta < 67.5) return 'out to left-center';
+    if(delta >= 67.5 && delta < 112.5) return 'to left field';
+    if(delta >= 112.5 && delta < 157.5) return 'in from left field';
+    if(delta >= 157.5 && delta < 202.5) return 'to home plate';
+    if(delta >= 202.5 && delta < 247.5) return 'in from right field';
+    if(delta >= 247.5 && delta < 292.5) return 'to right field';
+    return 'out to right-center';
+}
+
+function getClosestHourlyIndex(times, targetDate){
+    if(!Array.isArray(times) || !times.length) return -1;
+    const target = new Date(targetDate).getTime();
+    let bestIndex = 0;
+    let bestDiff = Infinity;
+
+    times.forEach((time, index) => {
+        const value = new Date(time).getTime();
+        const diff = Math.abs(value - target);
+        if(diff < bestDiff){
+            bestDiff = diff;
+            bestIndex = index;
+        }
+    });
+
+    return bestIndex;
+}
+
+async function fetchMLBGameEnvironment(event, homeTeam){
+    const venueMeta = getMLBVenueMeta(homeTeam);
+    if(!venueMeta) return null;
+
+    const cacheKey = `${event?.id || ''}_${homeTeam?.team?.abbreviation || ''}`;
+    if(mlbEnvironmentCache[cacheKey]) return mlbEnvironmentCache[cacheKey];
+
+    if(venueMeta.roofType !== 'outdoor'){
+        const result = {
+            type: 'roof',
+            roofType: venueMeta.roofType,
+            label: venueMeta.roofLabel
+        };
+        mlbEnvironmentCache[cacheKey] = result;
+        return result;
+    }
+
+    try {
+        const params = new URLSearchParams({
+            latitude: String(venueMeta.lat),
+            longitude: String(venueMeta.lon),
+            hourly: 'temperature_2m,weather_code,wind_speed_10m,wind_direction_10m,precipitation_probability',
+            forecast_days: '2',
+            temperature_unit: 'fahrenheit',
+            wind_speed_unit: 'mph',
+            timezone: 'auto'
+        });
+
+        const res = await fetchWithTimeout(`https://api.open-meteo.com/v1/forecast?${params.toString()}`, 8000);
+        if(!res.ok) throw new Error(`Weather fetch failed: ${res.status}`);
+
+        const data = await res.json();
+        const hourly = data?.hourly || {};
+        const idx = getClosestHourlyIndex(hourly?.time, event?.date);
+
+        if(idx < 0){
+            const fallback = {
+                type: 'roof',
+                roofType: 'outdoor',
+                label: 'Open Air'
+            };
+            mlbEnvironmentCache[cacheKey] = fallback;
+            return fallback;
+        }
+
+        const temp = hourly?.temperature_2m?.[idx];
+        const wind = hourly?.wind_speed_10m?.[idx];
+        const windDir = hourly?.wind_direction_10m?.[idx];
+        const precip = hourly?.precipitation_probability?.[idx];
+        const weatherCode = hourly?.weather_code?.[idx];
+
+        const pieces = [];
+        if(temp != null) pieces.push(`${Math.round(temp)}°`);
+        if(weatherCode != null) pieces.push(getWeatherDescription(weatherCode));
+        if(wind != null){
+            const fieldWind = getStadiumFieldWindDirection(windDir, venueMeta.fieldBearing);
+            const fallbackWind = getCompassDirectionLabel(windDir);
+            pieces.push(`Wind ${Math.round(wind)} mph${fieldWind ? ` ${fieldWind}` : (fallbackWind ? ` from ${fallbackWind}` : '')}`);
+        }
+        if(precip != null) pieces.push(`${Math.round(precip)}% precip`);
+
+        const result = {
+            type: 'weather',
+            label: pieces.join(' · ') || 'Weather Unavailable'
+        };
+        mlbEnvironmentCache[cacheKey] = result;
+        return result;
+    } catch (err) {
+        console.error('MLB weather fetch failed:', err);
+        const fallback = {
+            type: 'roof',
+            roofType: 'outdoor',
+            label: 'Open Air'
+        };
+        mlbEnvironmentCache[cacheKey] = fallback;
+        return fallback;
+    }
+}
+
+function buildMLBEnvironmentHTML(event, homeTeam){
+    const venueMeta = getMLBVenueMeta(homeTeam);
+    if(!venueMeta) return '';
+
+    const labelPrefix = venueMeta.roofType === 'outdoor' ? 'Weather' : 'Roof';
+    const defaultText = venueMeta.roofType === 'outdoor' ? 'Loading…' : venueMeta.roofLabel;
+    const pillClass = venueMeta.roofType === 'outdoor'
+        ? 'environment-pill outdoor'
+        : venueMeta.roofType === 'retractable'
+            ? 'environment-pill retractable'
+            : 'environment-pill fixed';
+
+    return `
+        <div class="environment-line" data-env-id="${event.id}">
+            <span class="details-label">${labelPrefix}:</span>
+            <span class="${pillClass}${venueMeta.roofType === 'outdoor' ? ' environment-loading' : ''}" data-env-pill="true">${defaultText}</span>
+        </div>
+    `;
+}
+
+async function enhanceMLBEnvironmentUI(gameDiv, event, homeTeam){
+    if(currentLeague !== 'MLB') return;
+
+    const wrapper = gameDiv.querySelector(`[data-env-id="${event.id}"]`);
+    if(!wrapper) return;
+
+    const pill = wrapper.querySelector('[data-env-pill="true"]');
+    if(!pill) return;
+
+    const result = await fetchMLBGameEnvironment(event, homeTeam);
+    if(!result) return;
+
+    const labelEl = wrapper.querySelector('.details-label');
+    if(labelEl){
+        labelEl.textContent = `${result.type === 'weather' ? 'Weather' : 'Roof'}:`;
+    }
+
+    pill.classList.remove('environment-loading', 'outdoor', 'retractable', 'fixed');
+    if(result.type === 'weather'){
+        pill.classList.add('environment-pill', 'outdoor');
+        pill.textContent = result.label;
+    } else {
+        pill.classList.add('environment-pill', result.roofType || 'fixed');
+        pill.textContent = result.label;
+    }
 }
 
 
@@ -1437,12 +1763,14 @@ function buildDetailsHTML(event, home, away){
     const venue = comp.venue?.fullName || comp.venue?.address?.city || 'TBD';
     const statusDetail = event.status?.type?.detail || event.status?.type?.shortDetail || 'TBD';
     const broadcasts = (comp.broadcasts || []).flatMap(b => b.names || []).join(', ') || 'TBD';
+    const environmentHTML = currentLeague === 'MLB' ? buildMLBEnvironmentHTML(event, home) : '';
 
     return `
         <div class="details-panel">
             <div class="details-grid">
                 <div><span class="details-label">Venue:</span>${venue}</div>
                 <div><span class="details-label">Status:</span>${statusDetail}</div>
+                ${environmentHTML}
                 <div>
                     <span class="details-label">Records:</span>
                     <div class="records-matchup">
@@ -1632,6 +1960,9 @@ function renderGame(event, grid){
             away.team.abbreviation,
             home.team.abbreviation
         ).catch(err => console.error("MLB pitcher enhancement failed:", err));
+
+        enhanceMLBEnvironmentUI(gameDiv, event, home)
+            .catch(err => console.error("MLB environment enhancement failed:", err));
     }
 
     if(currentLeague === "NHL"){
