@@ -606,15 +606,18 @@ async function fetchLeagueRecentForm(){
     const sportPath = leagues[currentLeague];
     if(!sportPath) return;
 
-    const seasonType = currentLeague === 'NFL' ? 2 : 2;
     const groups = currentLeague === 'NCAAMB' ? '&groups=50' : '';
-    const url = `https://site.api.espn.com/apis/site/v2/sports/${sportPath}/scoreboard?limit=300&dates=${getDate(-30)}-${getDate(0)}&seasontype=${seasonType}${groups}`;
+    // No seasontype filter — ESPN returns all game types (regular season + playoffs)
+    // for whatever dates fall in the window. This mirrors how loadGames() fetches
+    // today's scoreboard (also no seasontype), ensuring playoff games are included.
+    const url = `https://site.api.espn.com/apis/site/v2/sports/${sportPath}/scoreboard?limit=500&dates=${getDate(-60)}-${getDate(0)}${groups}`;
 
     try {
         const res = await fetchWithTimeout(url, 8000);
         if(!res.ok) return;
         const data = await res.json();
         const events = Array.isArray(data?.events) ? data.events : [];
+        console.log(`[Form] ${currentLeague}: fetched ${events.length} events over last 60 days`);
         const overallFormMap = {};
         const splitFormMap = { home: {}, away: {} };
 
