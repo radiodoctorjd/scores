@@ -304,6 +304,22 @@ header { padding:15px; text-align:center; font-size:24px; font-weight:bold; back
 
 .watch-line { margin-top:8px; color:#475569; }
 
+.series-line { margin-top:6px; }
+.series-badge {
+    display:inline-block;
+    font-size:12px;
+    font-weight:800;
+    padding:4px 10px;
+    border-radius:999px;
+    background:rgba(59,130,246,0.10);
+    color:#1d4ed8;
+    letter-spacing:0.01em;
+}
+.series-badge.series-won {
+    background:rgba(22,163,74,0.12);
+    color:#15803d;
+}
+
 
 .environment-line {
     margin-top:2px;
@@ -1761,16 +1777,71 @@ function buildFormCard(team, side){
     `;
 }
 
+function getPlayoffSeriesInfo(event){
+    const comp = event.competitions?.[0] || {};
+    const series = comp.series;
+    const isPlayoff = event.season?.type === 3;
+
+    if(!isPlayoff && !series) return null;
+
+    // ESPN provides a pre-built summary string — use it directly
+    if(series?.summary){
+        return { summary: series.summary, completed: series.completed || false };
+    }
+
+    // Build the summary from per-team wins in series.competitors
+    if(series?.competitors?.length >= 2){
+        const comps = comp.competitors || [];
+        const winMap = {};
+        series.competitors.forEach(sc => { winMap[sc.id] = sc.wins ?? 0; });
+
+        const home = comps.find(t => t.homeAway === 'home');
+        const away = comps.find(t => t.homeAway === 'away');
+
+        if(home && away){
+            const homeWins = winMap[home.id] ?? 0;
+            const awayWins = winMap[away.id] ?? 0;
+            // Best-of-7 by default; ESPN encodes series length in series.type.id for some leagues
+            const seriesLen = series.type?.length || 7;
+            const winsNeeded = Math.ceil(seriesLen / 2);
+            const completed = homeWins >= winsNeeded || awayWins >= winsNeeded;
+            const verb = completed ? 'wins series' : 'leads';
+
+            if(homeWins === 0 && awayWins === 0){
+                return { summary: 'Playoff Game 1', completed: false };
+            } else if(homeWins === awayWins){
+                return { summary: `Series Tied ${homeWins}-${awayWins}`, completed: false };
+            } else if(homeWins > awayWins){
+                return { summary: `${home.team.abbreviation} ${verb} ${homeWins}-${awayWins}`, completed };
+            } else {
+                return { summary: `${away.team.abbreviation} ${verb} ${awayWins}-${homeWins}`, completed };
+            }
+        }
+    }
+
+    // Playoff game but no series detail yet (e.g. Game 1 before any wins data)
+    if(isPlayoff){
+        return { summary: 'Playoff Game', completed: false };
+    }
+
+    return null;
+}
+
 function buildDetailsHTML(event, home, away){
     const comp = event.competitions?.[0] || {};
     const venue = comp.venue?.fullName || comp.venue?.address?.city || 'TBD';
     const statusDetail = event.status?.type?.detail || event.status?.type?.shortDetail || 'TBD';
     const broadcasts = (comp.broadcasts || []).flatMap(b => b.names || []).join(', ') || 'TBD';
     const environmentHTML = currentLeague === 'MLB' ? buildMLBEnvironmentHTML(event, home) : '';
+    const seriesInfo = getPlayoffSeriesInfo(event);
+    const seriesHTML = seriesInfo
+        ? `<div><span class="details-label">Series:</span><span class="series-badge${seriesInfo.completed ? ' series-won' : ''}">${seriesInfo.summary}</span></div>`
+        : '';
 
     return `
         <div class="details-panel">
             <div class="details-grid">
+                ${seriesHTML}
                 <div><span class="details-label">Venue:</span>${venue}</div>
                 <div><span class="details-label">Status:</span>${statusDetail}</div>
                 ${environmentHTML}
@@ -1921,6 +1992,8 @@ function renderGame(event, grid){
     gameDiv.dataset.awayName = away.team.displayName;
     gameDiv.dataset.homeName = home.team.displayName;
 
+    const seriesInfo = getPlayoffSeriesInfo(event);
+
     gameDiv.innerHTML = `
         <div class="team-line">
             ${isLive ? '<span class="live-badge">LIVE</span>' : ''}
@@ -1930,6 +2003,7 @@ function renderGame(event, grid){
                 <img src="${home.team.logo}" alt="${home.team.abbreviation} logo"><span>${home.team.abbreviation}</span>
             </div>
         </div>
+        ${seriesInfo ? `<div class="series-line"><span class="series-badge${seriesInfo.completed ? ' series-won' : ''}">${seriesInfo.summary}</span></div>` : ''}
 
         ${currentLeague === "MLB" ? `
         <div class="pitchers">
