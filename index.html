@@ -622,64 +622,74 @@ async function fetchLeagueRecentForm(){
     const sportPath = leagues[currentLeague];
     if(!sportPath) return;
 
+    // ESPN's scoreboard endpoint only accepts a single date, not a range.
+    // Fetch the last 14 days individually in parallel so each team can
+    // accumulate up to 5 results for the "Last 5" and home/road split forms.
     const groups = currentLeague === 'NCAAMB' ? '&groups=50' : '';
-    // No seasontype filter — ESPN returns all game types (regular season + playoffs)
-    // for whatever dates fall in the window. This mirrors how loadGames() fetches
-    // today's scoreboard (also no seasontype), ensuring playoff games are included.
-    const url = `https://site.api.espn.com/apis/site/v2/sports/${sportPath}/scoreboard?limit=500&dates=${getDate(-60)}-${getDate(0)}${groups}`;
+    const dayOffsets = [-1,-2,-3,-4,-5,-6,-7,-8,-9,-10,-11,-12,-13,-14];
+    const allEvents = [];
+    const seen = new Set();
 
-    try {
-        const res = await fetchWithTimeout(url, 8000);
-        if(!res.ok) return;
-        const data = await res.json();
-        const events = Array.isArray(data?.events) ? data.events : [];
-        console.log(`[Form] ${currentLeague}: fetched ${events.length} events over last 60 days`);
-        const overallFormMap = {};
-        const splitFormMap = { home: {}, away: {} };
-
-        events
-            .filter(event => event?.status?.type?.completed)
-            .sort((a, b) => new Date(b.date) - new Date(a.date))
-            .forEach(event => {
-                const winnerAbbr = getWinnerAbbreviation(event);
-                const competitors = event?.competitions?.[0]?.competitors || [];
-
-                competitors.forEach(team => {
-                    const abbr = team?.team?.abbreviation;
-                    const side = team?.homeAway;
-                    if(!abbr) return;
-
-                    const result = winnerAbbr
-                        ? (winnerAbbr === abbr ? 'W' : 'L')
-                        : '—';
-
-                    if(!overallFormMap[abbr]) overallFormMap[abbr] = [];
-                    if(overallFormMap[abbr].length < 5){
-                        overallFormMap[abbr].push(result);
-                    }
-
-                    if(side === 'home' || side === 'away'){
-                        if(!splitFormMap[side][abbr]) splitFormMap[side][abbr] = [];
-                        if(splitFormMap[side][abbr].length < 5){
-                            splitFormMap[side][abbr].push(result);
-                        }
-                    }
-                });
+    await Promise.all(dayOffsets.map(async offset => {
+        try {
+            const url = `https://site.api.espn.com/apis/site/v2/sports/${sportPath}/scoreboard?dates=${getDate(offset)}${groups}`;
+            const res = await fetchWithTimeout(url, 6000);
+            if(!res.ok) return;
+            const data = await res.json();
+            (data?.events || []).forEach(event => {
+                if(!seen.has(event.id)){
+                    seen.add(event.id);
+                    allEvents.push(event);
+                }
             });
+        } catch(err) {}
+    }));
 
-        Object.keys(overallFormMap).forEach(abbr => {
-            teamFormCache[abbr] = overallFormMap[abbr].join('-');
+    console.log(`[Form] ${currentLeague}: fetched ${allEvents.length} events over last 14 days`);
+
+    const overallFormMap = {};
+    const splitFormMap = { home: {}, away: {} };
+
+    allEvents
+        .filter(event => event?.status?.type?.completed)
+        .sort((a, b) => new Date(b.date) - new Date(a.date))
+        .forEach(event => {
+            const winnerAbbr = getWinnerAbbreviation(event);
+            const competitors = event?.competitions?.[0]?.competitors || [];
+
+            competitors.forEach(team => {
+                const abbr = team?.team?.abbreviation;
+                const side = team?.homeAway;
+                if(!abbr) return;
+
+                const result = winnerAbbr
+                    ? (winnerAbbr === abbr ? 'W' : 'L')
+                    : '—';
+
+                if(!overallFormMap[abbr]) overallFormMap[abbr] = [];
+                if(overallFormMap[abbr].length < 5){
+                    overallFormMap[abbr].push(result);
+                }
+
+                if(side === 'home' || side === 'away'){
+                    if(!splitFormMap[side][abbr]) splitFormMap[side][abbr] = [];
+                    if(splitFormMap[side][abbr].length < 5){
+                        splitFormMap[side][abbr].push(result);
+                    }
+                }
+            });
         });
 
-        teamSplitFormCache = { home: {}, away: {} };
-        ['home', 'away'].forEach(side => {
-            Object.keys(splitFormMap[side]).forEach(abbr => {
-                teamSplitFormCache[side][abbr] = splitFormMap[side][abbr].join('-');
-            });
+    Object.keys(overallFormMap).forEach(abbr => {
+        teamFormCache[abbr] = overallFormMap[abbr].join('-');
+    });
+
+    teamSplitFormCache = { home: {}, away: {} };
+    ['home', 'away'].forEach(side => {
+        Object.keys(splitFormMap[side]).forEach(abbr => {
+            teamSplitFormCache[side][abbr] = splitFormMap[side][abbr].join('-');
         });
-    } catch (err) {
-        console.error('Recent form fetch failed:', err);
-    }
+    });
 }
 
 
