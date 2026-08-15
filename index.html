@@ -2230,6 +2230,7 @@ function renderGame(event, grid, leagueKey = currentLeague, opts = {}){
     const gameDiv = document.createElement("div");
     gameDiv.className = "game";
     gameDiv.dataset.eventId = event.id;
+    gameDiv.dataset.league = leagueKey;
     gameDiv.dataset.awayAbbr = away.team.abbreviation;
     gameDiv.dataset.homeAbbr = home.team.abbreviation;
     gameDiv.dataset.awayName = away.team.displayName;
@@ -2471,26 +2472,50 @@ async function refreshAllLiveGames(){
                 `https://site.api.espn.com/apis/site/v2/sports/${endpoint}/scoreboard?dates=${getDate(0)}${groups}`,
                 8000
             );
-            if(!res.ok) return [];
+            if(!res.ok){
+                console.warn(`[Live] ${leagueKey} refresh responded ${res.status} - leaving its cards as-is this cycle.`);
+                return { leagueKey, ok: false, events: [] };
+            }
             const data = await res.json();
-            return (data.events || []).map(e => ({ event: e, leagueKey }));
+            return { leagueKey, ok: true, events: (data.events || []).map(e => ({ event: e, leagueKey })) };
         } catch (err) {
-            console.error(`Live refresh fetch failed for ${leagueKey}:`, err);
-            return [];
+            console.warn(`[Live] ${leagueKey} refresh fetch failed - leaving its cards as-is this cycle:`, err?.message || err);
+            return { leagueKey, ok: false, events: [] };
         }
     }));
 
-    const allEvents = results.flat();
+    const failedLeagues = new Set(results.filter(r => !r.ok).map(r => r.leagueKey));
+
+    // If every single league's fetch failed this cycle (offline blip, rate
+    // limit, etc.) don't touch the page at all - just retry on the next
+    // tick. This is what used to wipe a perfectly good live view down to
+    // "No games are currently live" on a transient network hiccup.
+    if(failedLeagues.size === leagueKeys.length){
+        console.warn('[Live] All league fetches failed this refresh cycle - keeping the previous view untouched.');
+        return;
+    }
+
+    const allEvents = results.flatMap(r => r.events);
     const liveEvents = allEvents.filter(({ event }) => event?.status?.type?.state === "in");
 
     const grid = document.querySelector(".live-grid");
-    const renderedIds = new Set(
-        Array.from(document.querySelectorAll('.live-grid .game[data-event-id]')).map(el => el.dataset.eventId)
-    );
+    const renderedGameDivs = Array.from(document.querySelectorAll('.live-grid .game[data-event-id]'));
+    const renderedIds = new Set(renderedGameDivs.map(el => el.dataset.eventId));
     const currentIds = new Set(liveEvents.map(({ event }) => event.id));
 
     let structureChanged = !grid;
-    renderedIds.forEach(id => { if(!currentIds.has(id)) structureChanged = true; });
+
+    renderedGameDivs.forEach(el => {
+        const id = el.dataset.eventId;
+        if(currentIds.has(id)) return;
+        // This card's game isn't in the live list anymore. Only treat that
+        // as real (game ended) if its league's fetch actually succeeded
+        // this cycle - otherwise it's just missing data, not a finished game.
+        if(!failedLeagues.has(el.dataset.league)){
+            structureChanged = true;
+        }
+    });
+
     currentIds.forEach(id => { if(!renderedIds.has(id)) structureChanged = true; });
 
     if(structureChanged){
