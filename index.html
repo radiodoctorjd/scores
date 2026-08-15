@@ -214,6 +214,29 @@ header { padding:15px; text-align:center; font-size:24px; font-weight:bold; back
     animation:pulse 1s infinite;
 }
 
+.live-tab-dot {
+    display:inline-block;
+    width:9px;
+    height:9px;
+    border-radius:50%;
+    background:red;
+    margin-right:6px;
+    animation:pulse 1s infinite;
+}
+
+.league-tag {
+    display:inline-block;
+    font-size:10px;
+    font-weight:800;
+    letter-spacing:0.04em;
+    padding:2px 7px;
+    border-radius:999px;
+    background:rgba(56,189,248,0.16);
+    color:#0369a1;
+    margin-right:6px;
+    vertical-align:middle;
+}
+
 .scoreboard { margin-top:8px; font-size:12px; overflow-x:auto; border-radius:8px; }
 .scoreboard table { width:100%; border-collapse:collapse; }
 .scoreboard th, .scoreboard td { padding:4px 6px; text-align:center; }
@@ -414,7 +437,8 @@ const leagues = {
     NFL: "football/nfl",
     NBA: "basketball/nba",
     WNBA: "basketball/wnba",
-    NCAAMB: "basketball/mens-college-basketball"
+    NCAAMB: "basketball/mens-college-basketball",
+    NCAAFB: "football/college-football"
 };
 
 const leagueLogos = {
@@ -423,10 +447,52 @@ const leagueLogos = {
     NFL: "images/nfl.svg",
     NBA: "images/nba.svg",
     WNBA: "images/wnba.svg",
-    NCAAMB: "images/ncaamb.svg"
+    NCAAMB: "images/ncaamb.svg",
+    NCAAFB: "images/ncaafb.svg"
 };
 
-let currentLeague = "NHL";
+// SiriusXM channel info by league. "short" is used in the compact game-card
+// line, "full" (with more context/caveats) is used in the details panel.
+// Channel numbers per SiriusXM's own channel guide (siriusxm.com) as of the
+// 2025/2026 season - double check on siriusxm.com if these ever change.
+const siriusXMInfo = {
+    NHL: {
+        short: "SiriusXM NHL Network Radio (Ch. 91)",
+        full: "SiriusXM NHL Network Radio (Ch. 91). Each team's own home/away radio call is also carried as a separate channel in the SiriusXM app."
+    },
+    MLB: {
+        short: "MLB Network Radio (Ch. 89)",
+        full: "MLB Network Radio (Ch. 89). Each team's home/away radio call (your choice of announcers) is also carried as a separate channel in the SiriusXM app."
+    },
+    NFL: {
+        short: "SiriusXM NFL Radio (Ch. 88)",
+        full: "SiriusXM NFL Radio (Ch. 88). Every team's local radio call is also carried as a separate channel in the SiriusXM app."
+    },
+    NBA: {
+        short: "SiriusXM NBA Radio (Ch. 86)",
+        full: "SiriusXM NBA Radio (Ch. 86). Each team's local radio call is also carried as a separate channel in the SiriusXM app."
+    },
+    WNBA: {
+        short: "SiriusXM NBA Radio (Ch. 86, select games)",
+        full: "WNBA doesn't have its own year-round channel - select games air on SiriusXM NBA Radio (Ch. 86). Check the SiriusXM app for additional team coverage."
+    },
+    NCAAMB: {
+        short: "SiriusXM College Sports Radio (Ch. 84)",
+        full: "SiriusXM College Sports Radio (Ch. 84), plus conference channels (Big Ten Ch. 372, ACC Ch. 371, SEC Ch. 374) during in-season coverage. Not every game is carried."
+    },
+    NCAAFB: {
+        short: "SiriusXM College Sports Radio (Ch. 84)",
+        full: "SiriusXM College Sports Radio (Ch. 84), plus conference channels (Big Ten Ch. 372, ACC Ch. 371, SEC Ch. 374). Coverage comes mainly via Westwood One and conference deals - not every game is carried."
+    }
+};
+
+function getRadioInfo(leagueKey, variant){
+    const entry = siriusXMInfo[leagueKey];
+    if(!entry) return "";
+    return entry[variant] || "";
+}
+
+let currentLeague = "LIVE";
 const tabsDiv = document.getElementById("tabs");
 const containerDiv = document.getElementById("content-container");
 let gameStateMap = {};
@@ -438,6 +504,17 @@ let mlbEnvironmentCache = {};
 let leagueFormCache = {};
 let teamFormCache = {};
 let teamSplitFormCache = { home: {}, away: {} };
+
+const liveTab = document.createElement("div");
+liveTab.className = "tab" + (currentLeague === "LIVE" ? " active" : "");
+liveTab.innerHTML = `<span class="live-tab-dot"></span>Live Games`;
+liveTab.onclick = () => {
+    document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+    liveTab.classList.add("active");
+    currentLeague = "LIVE";
+    loadGames();
+};
+tabsDiv.appendChild(liveTab);
 
 Object.keys(leagues).forEach(l => {
     const tab = document.createElement("div");
@@ -803,8 +880,8 @@ function parseDailyFantasyFuelGoalies(text){
     return data;
 }
 
-async function fetchNHLGoalies(forceRefresh = false){
-    if(currentLeague !== "NHL"){
+async function fetchNHLGoalies(forceRefresh = false, leagueKey = currentLeague){
+    if(leagueKey !== "NHL"){
         return;
     }
 
@@ -1129,8 +1206,8 @@ function buildMLBEnvironmentHTML(event, homeTeam){
     `;
 }
 
-async function enhanceMLBEnvironmentUI(gameDiv, event, homeTeam){
-    if(currentLeague !== 'MLB') return;
+async function enhanceMLBEnvironmentUI(gameDiv, event, homeTeam, leagueKey = currentLeague){
+    if(leagueKey !== 'MLB') return;
 
     const wrapper = gameDiv.querySelector(`[data-env-id="${event.id}"]`);
     if(!wrapper) return;
@@ -1269,7 +1346,7 @@ function formatGameTime(dateString){
     return new Date(dateString).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
 }
 
-function getStatusText(event){
+function getStatusText(event, leagueKey = currentLeague){
     const situation = getSituation(event);
     const isFinal = event.status.type.completed;
     const isLive = event.status.type.state === "in";
@@ -1284,7 +1361,7 @@ function getStatusText(event){
         return `<strong>${formatGameTime(event.date)}</strong>`;
     }
 
-    if(currentLeague === "MLB" && isLive){
+    if(leagueKey === "MLB" && isLive){
         const balls = situation.balls ?? 0;
         const strikes = situation.strikes ?? 0;
         const outs = situation.outs ?? 0;
@@ -1837,12 +1914,13 @@ function getPlayoffSeriesInfo(event){
     return null;
 }
 
-function buildDetailsHTML(event, home, away){
+function buildDetailsHTML(event, home, away, leagueKey = currentLeague, includeForms = true){
     const comp = event.competitions?.[0] || {};
     const venue = comp.venue?.fullName || comp.venue?.address?.city || 'TBD';
     const statusDetail = event.status?.type?.detail || event.status?.type?.shortDetail || 'TBD';
     const broadcasts = (comp.broadcasts || []).flatMap(b => b.names || []).join(', ') || 'TBD';
-    const environmentHTML = currentLeague === 'MLB' ? buildMLBEnvironmentHTML(event, home) : '';
+    const environmentHTML = leagueKey === 'MLB' ? buildMLBEnvironmentHTML(event, home) : '';
+    const radioFull = getRadioInfo(leagueKey, 'full');
     const seriesInfo = getPlayoffSeriesInfo(event);
     const seriesHTML = seriesInfo
         ? `<div><span class="details-label">Series:</span><span class="series-badge${seriesInfo.completed ? ' series-won' : ''}">${seriesInfo.summary}</span></div>`
@@ -1862,14 +1940,16 @@ function buildDetailsHTML(event, home, away){
                         ${buildTeamRecordCard(home, 'home')}
                     </div>
                 </div>
+                ${includeForms ? `
                 <div>
                     <span class="details-label">Current Form:</span>
                     <div class="records-matchup">
                         ${buildFormCard(away, 'away')}
                         ${buildFormCard(home, 'home')}
                     </div>
-                </div>
+                </div>` : ''}
                 <div><span class="details-label">Watch:</span>${broadcasts}</div>
+                ${radioFull ? `<div><span class="details-label">Radio:</span>${radioFull}</div>` : ''}
             </div>
         </div>
     `;
@@ -1966,7 +2046,10 @@ function refreshVisibleNHLGoalies(){
     });
 }
 
-function renderGame(event, grid){
+function renderGame(event, grid, leagueKey = currentLeague, opts = {}){
+    const includeForms = opts.includeForms !== false;
+    const showLeagueTag = !!opts.showLeagueTag;
+
     const comp = event.competitions[0];
     const home = comp.competitors.find(t => t.homeAway === "home");
     const away = comp.competitors.find(t => t.homeAway === "away");
@@ -1974,7 +2057,7 @@ function renderGame(event, grid){
     const isLive = event.status.type.state === "in";
     const isFinal = event.status.type.completed;
     const [topTeam, bottomTeam] = getSortedTeams(home, away);
-    const statusText = getStatusText(event);
+    const statusText = getStatusText(event, leagueKey);
     const tableHTML = buildTableHTML(away, home);
 
     let scoreHTML = "";
@@ -1994,6 +2077,8 @@ function renderGame(event, grid){
         broadcast = comp.broadcasts.flatMap(b => b.names || []).join(", ");
     }
 
+    const radioShort = !isFinal ? getRadioInfo(leagueKey, 'short') : "";
+
     const gameDiv = document.createElement("div");
     gameDiv.className = "game";
     gameDiv.dataset.eventId = event.id;
@@ -2007,6 +2092,7 @@ function renderGame(event, grid){
     gameDiv.innerHTML = `
         <div class="team-line">
             ${isLive ? '<span class="live-badge">LIVE</span>' : ''}
+            ${showLeagueTag ? `<span class="league-tag">${leagueKey}</span>` : ''}
             <div class="matchup-text">
                 <img src="${away.team.logo}" alt="${away.team.abbreviation} logo"><span>${away.team.abbreviation}</span>
                 <span class="matchup-at">@</span>
@@ -2015,11 +2101,11 @@ function renderGame(event, grid){
         </div>
         ${seriesInfo ? `<div class="series-line"><span class="series-badge${seriesInfo.completed ? ' series-won' : ''}">${seriesInfo.summary}</span></div>` : ''}
 
-        ${currentLeague === "MLB" ? `
+        ${leagueKey === "MLB" ? `
         <div class="pitchers">
             <div class="pitcher-away">${away.team.abbreviation}: ${formatPitcher(away.probables?.[0])}</div>
             <div class="pitcher-home">${home.team.abbreviation}: ${formatPitcher(home.probables?.[0])}</div>
-        </div>` : currentLeague === "NHL" && !isFinal ? `
+        </div>` : leagueKey === "NHL" && !isFinal ? `
         <div class="pitchers">
             <div class="goalie-away"></div>
             <div class="goalie-home"></div>
@@ -2032,14 +2118,15 @@ function renderGame(event, grid){
         <div class="status game-status">${statusText}</div>
         ${isLive ? '<div class="divider status-divider"></div>' : ""}
         ${broadcast ? `<div class="status watch-line"><small>Watch: ${broadcast}</small></div>` : ""}
+        ${radioShort ? `<div class="status watch-line"><small>Radio: ${radioShort}</small></div>` : ""}
         <button class="details-toggle" type="button">More details ▼</button>
-        ${buildDetailsHTML(event, home, away)}
+        ${buildDetailsHTML(event, home, away, leagueKey, includeForms)}
     `;
 
     grid.appendChild(gameDiv);
     bindDetailsToggle(gameDiv);
 
-    if(currentLeague === "MLB"){
+    if(leagueKey === "MLB"){
         enhanceMLBPitchersUI(
             gameDiv,
             away.probables?.[0],
@@ -2048,20 +2135,79 @@ function renderGame(event, grid){
             home.team.abbreviation
         ).catch(err => console.error("MLB pitcher enhancement failed:", err));
 
-        enhanceMLBEnvironmentUI(gameDiv, event, home)
+        enhanceMLBEnvironmentUI(gameDiv, event, home, leagueKey)
             .catch(err => console.error("MLB environment enhancement failed:", err));
     }
 
-    if(currentLeague === "NHL"){
+    if(leagueKey === "NHL"){
         enhanceNHLGoaliesUI(gameDiv, away, home);
     }
 
     gameStateMap[event.id] = buildGameState(event);
 }
 
+async function loadAllLiveGames(){
+    const leagueKeys = Object.keys(leagues);
+
+    const results = await Promise.all(leagueKeys.map(async (leagueKey) => {
+        try {
+            const endpoint = leagues[leagueKey];
+            const groups = leagueKey === 'NCAAMB' ? '&groups=50' : '';
+            const res = await fetchWithTimeout(
+                `https://site.api.espn.com/apis/site/v2/sports/${endpoint}/scoreboard?dates=${getDate(0)}${groups}`,
+                8000
+            );
+            if(!res.ok) return [];
+            const data = await res.json();
+            return (data.events || [])
+                .filter(e => e?.status?.type?.state === "in")
+                .map(e => ({ event: e, leagueKey }));
+        } catch (err) {
+            console.error(`Live games fetch failed for ${leagueKey}:`, err);
+            return [];
+        }
+    }));
+
+    const liveList = results.flat().sort((a, b) => new Date(a.event.date) - new Date(b.event.date));
+
+    if(liveList.some(item => item.leagueKey === "NHL")){
+        try {
+            await fetchNHLGoalies(false, "NHL");
+        } catch (err) {
+            console.error('NHL goalie fetch failed during live aggregation:', err);
+        }
+    }
+
+    if(!liveList.length){
+        const empty = document.createElement("div");
+        empty.className = "section-title";
+        empty.innerText = "No games are currently live";
+        containerDiv.appendChild(empty);
+        return;
+    }
+
+    const liveHeader = document.createElement("div");
+    liveHeader.className = "section-title live-header";
+    liveHeader.innerText = "🔴 Live Games";
+    containerDiv.appendChild(liveHeader);
+
+    const liveGrid = document.createElement("div");
+    liveGrid.className = "content live-grid";
+    containerDiv.appendChild(liveGrid);
+
+    liveList.forEach(({ event, leagueKey }) => {
+        renderGame(event, liveGrid, leagueKey, { includeForms: false, showLeagueTag: true });
+    });
+}
+
 async function loadGames(){
     containerDiv.innerHTML = "";
     gameStateMap = {};
+
+    if(currentLeague === "LIVE"){
+        await loadAllLiveGames();
+        return;
+    }
 
     await fetchLeagueRecentForm();
 
@@ -2166,6 +2312,13 @@ async function refreshLiveGames(){
     refreshInFlight = true;
 
     try {
+        if(currentLeague === "LIVE"){
+            // Multiple leagues are aggregated on this tab, so a full
+            // reload is simplest/safest rather than diffing per-league.
+            await loadGames();
+            return;
+        }
+
         if(currentLeague === "NHL"){
             fetchNHLGoalies().then(() => refreshVisibleNHLGoalies()).catch(() => {});
         }
