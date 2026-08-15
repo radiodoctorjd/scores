@@ -435,20 +435,20 @@ const leagues = {
     NHL: "hockey/nhl",
     MLB: "baseball/mlb",
     NFL: "football/nfl",
+    NCAAFB: "football/college-football",
     NBA: "basketball/nba",
     WNBA: "basketball/wnba",
-    NCAAMB: "basketball/mens-college-basketball",
-    NCAAFB: "football/college-football"
+    NCAAMB: "basketball/mens-college-basketball"
 };
 
 const leagueLogos = {
     NHL: "images/nhl.svg",
     MLB: "images/mlb.svg",
     NFL: "images/nfl.svg",
+    NCAAFB: "images/ncaafb.svg",
     NBA: "images/nba.svg",
     WNBA: "images/wnba.svg",
-    NCAAMB: "images/ncaamb.svg",
-    NCAAFB: "images/ncaafb.svg"
+    NCAAMB: "images/ncaamb.svg"
 };
 
 // SiriusXM channel info by league. "short" is used in the compact game-card
@@ -490,6 +490,105 @@ function getRadioInfo(leagueKey, variant){
     const entry = siriusXMInfo[leagueKey];
     if(!entry) return "";
     return entry[variant] || "";
+}
+
+// --- Live SiriusXM per-game channel lookup -------------------------------
+// siriusxm.com/sports/{slug} publishes a real day-by-day schedule with the
+// actual away/home channel numbers for each game (e.g. "Ch 177/859"). We
+// scrape that page (through the same CORS-proxy fallback chain used for the
+// NHL goalie data) and, if we can match the two teams in a given game to a
+// channel, show that instead of the generic per-league channel above. If
+// SiriusXM blocks the proxy, the page hasn't posted the day's slate yet, or
+// we can't match the team names, we just keep the generic info - nothing
+// breaks either way.
+const siriusXMScheduleSlugs = {
+    NHL: 'nhl',
+    MLB: 'mlb',
+    NFL: 'nfl',
+    NBA: 'nba',
+    WNBA: 'wnba',
+    NCAAMB: 'college-basketball',
+    NCAAFB: 'college-football'
+};
+
+let siriusXMScheduleCache = {};
+let siriusXMScheduleCacheTime = {};
+let siriusXMScheduleFetchPromises = {};
+
+async function fetchSiriusXMSchedule(leagueKey){
+    const slug = siriusXMScheduleSlugs[leagueKey];
+    if(!slug) return null;
+
+    const now = Date.now();
+    const cacheIsFresh = siriusXMScheduleCacheTime[leagueKey] && (now - siriusXMScheduleCacheTime[leagueKey] < 30 * 60 * 1000);
+    if(cacheIsFresh) return siriusXMScheduleCache[leagueKey];
+
+    if(!siriusXMScheduleFetchPromises[leagueKey]){
+        siriusXMScheduleFetchPromises[leagueKey] = (async () => {
+            try {
+                const text = await fetchTextWithFallback(`https://www.siriusxm.com/sports/${slug}`);
+                siriusXMScheduleCache[leagueKey] = text || null;
+                siriusXMScheduleCacheTime[leagueKey] = Date.now();
+            } catch (err) {
+                console.error(`SiriusXM schedule fetch failed for ${leagueKey}:`, err);
+            } finally {
+                delete siriusXMScheduleFetchPromises[leagueKey];
+            }
+            return siriusXMScheduleCache[leagueKey] || null;
+        })();
+    }
+
+    return siriusXMScheduleFetchPromises[leagueKey];
+}
+
+function findTeamChannelInText(scheduleText, teamNames){
+    if(!scheduleText) return null;
+    const normalizedText = scheduleText.replace(/\s+/g, ' ');
+
+    for(const name of teamNames){
+        if(!name) continue;
+        const idx = normalizedText.indexOf(name);
+        if(idx === -1) continue;
+        const window = normalizedText.slice(idx, idx + 150);
+        const chMatch = window.match(/CH\.?\s*#?\s*(\d{2,4})/i);
+        if(chMatch) return chMatch[1];
+    }
+    return null;
+}
+
+async function getGameSpecificRadioInfo(home, away, leagueKey){
+    const scheduleText = await fetchSiriusXMSchedule(leagueKey);
+    if(!scheduleText) return null;
+
+    const awayNames = [away.team.displayName, away.team.shortDisplayName, away.team.name, away.team.location].filter(Boolean);
+    const homeNames = [home.team.displayName, home.team.shortDisplayName, home.team.name, home.team.location].filter(Boolean);
+
+    const awayCh = findTeamChannelInText(scheduleText, awayNames);
+    const homeCh = findTeamChannelInText(scheduleText, homeNames);
+
+    if(!awayCh && !homeCh) return null;
+
+    const parts = [];
+    if(awayCh) parts.push(`${away.team.abbreviation}: Ch. ${awayCh}`);
+    if(homeCh) parts.push(`${home.team.abbreviation}: Ch. ${homeCh}`);
+    return parts.join(' · ');
+}
+
+async function enhanceRadioUI(gameDiv, home, away, leagueKey){
+    if(!siriusXMScheduleSlugs[leagueKey]) return;
+
+    try {
+        const specific = await getGameSpecificRadioInfo(home, away, leagueKey);
+        if(!specific) return;
+
+        const compactEl = gameDiv.querySelector('.radio-line-value');
+        if(compactEl) compactEl.textContent = specific;
+
+        const detailEl = gameDiv.querySelector('.radio-detail-value');
+        if(detailEl) detailEl.textContent = `${specific} (today's channels, via siriusxm.com/sports/${siriusXMScheduleSlugs[leagueKey]})`;
+    } catch (err) {
+        console.error('SiriusXM game-specific radio lookup failed:', err);
+    }
 }
 
 let currentLeague = "LIVE";
@@ -1585,8 +1684,8 @@ function updateScoreLines(gameDiv, topTeam, bottomTeam, isLive, isFinal){
     animateTextSpan(bottomScoreEl, bottomTeam.score ?? "");
 }
 
-function updateStatusUI(gameDiv, event){
-    const statusText = getStatusText(event);
+function updateStatusUI(gameDiv, event, leagueKey = currentLeague){
+    const statusText = getStatusText(event, leagueKey);
     const statusDiv = gameDiv.querySelector(".game-status");
 
     if(statusDiv && statusDiv.innerHTML !== statusText){
@@ -1949,7 +2048,7 @@ function buildDetailsHTML(event, home, away, leagueKey = currentLeague, includeF
                     </div>
                 </div>` : ''}
                 <div><span class="details-label">Watch:</span>${broadcasts}</div>
-                ${radioFull ? `<div><span class="details-label">Radio:</span>${radioFull}</div>` : ''}
+                ${radioFull ? `<div><span class="details-label">Radio:</span><span class="radio-detail-value">${radioFull}</span></div>` : ''}
             </div>
         </div>
     `;
@@ -2118,7 +2217,7 @@ function renderGame(event, grid, leagueKey = currentLeague, opts = {}){
         <div class="status game-status">${statusText}</div>
         ${isLive ? '<div class="divider status-divider"></div>' : ""}
         ${broadcast ? `<div class="status watch-line"><small>Watch: ${broadcast}</small></div>` : ""}
-        ${radioShort ? `<div class="status watch-line"><small>Radio: ${radioShort}</small></div>` : ""}
+        ${radioShort ? `<div class="status watch-line"><small>Radio: <span class="radio-line-value">${radioShort}</span></small></div>` : ""}
         <button class="details-toggle" type="button">More details ▼</button>
         ${buildDetailsHTML(event, home, away, leagueKey, includeForms)}
     `;
@@ -2141,6 +2240,11 @@ function renderGame(event, grid, leagueKey = currentLeague, opts = {}){
 
     if(leagueKey === "NHL"){
         enhanceNHLGoaliesUI(gameDiv, away, home);
+    }
+
+    if(!isFinal){
+        enhanceRadioUI(gameDiv, home, away, leagueKey)
+            .catch(err => console.error("SiriusXM radio enhancement failed:", err));
     }
 
     gameStateMap[event.id] = buildGameState(event);
@@ -2307,15 +2411,89 @@ async function fetchEventsForRefresh(){
     return allEvents;
 }
 
+async function refreshAllLiveGames(){
+    const leagueKeys = Object.keys(leagues);
+
+    const results = await Promise.all(leagueKeys.map(async (leagueKey) => {
+        try {
+            const endpoint = leagues[leagueKey];
+            const groups = leagueKey === 'NCAAMB' ? '&groups=50' : '';
+            const res = await fetchWithTimeout(
+                `https://site.api.espn.com/apis/site/v2/sports/${endpoint}/scoreboard?dates=${getDate(0)}${groups}`,
+                8000
+            );
+            if(!res.ok) return [];
+            const data = await res.json();
+            return (data.events || []).map(e => ({ event: e, leagueKey }));
+        } catch (err) {
+            console.error(`Live refresh fetch failed for ${leagueKey}:`, err);
+            return [];
+        }
+    }));
+
+    const allEvents = results.flat();
+    const liveEvents = allEvents.filter(({ event }) => event?.status?.type?.state === "in");
+
+    const grid = document.querySelector(".live-grid");
+    const renderedIds = new Set(
+        Array.from(document.querySelectorAll('.live-grid .game[data-event-id]')).map(el => el.dataset.eventId)
+    );
+    const currentIds = new Set(liveEvents.map(({ event }) => event.id));
+
+    let structureChanged = !grid;
+    renderedIds.forEach(id => { if(!currentIds.has(id)) structureChanged = true; });
+    currentIds.forEach(id => { if(!renderedIds.has(id)) structureChanged = true; });
+
+    if(structureChanged){
+        // A game went live, finished, or the section didn't exist yet -
+        // rebuild just the live section (still only this one reload, not
+        // a recurring one every 10s like before).
+        containerDiv.innerHTML = "";
+        gameStateMap = {};
+        await loadAllLiveGames();
+        return;
+    }
+
+    if(liveEvents.some(item => item.leagueKey === "NHL")){
+        fetchNHLGoalies(false, "NHL").then(() => {
+            liveEvents.filter(i => i.leagueKey === "NHL").forEach(({ event }) => {
+                const gameDiv = grid.querySelector(`[data-event-id="${event.id}"]`);
+                if(!gameDiv) return;
+                const comp = event.competitions[0];
+                const home = comp.competitors.find(t => t.homeAway === "home");
+                const away = comp.competitors.find(t => t.homeAway === "away");
+                enhanceNHLGoaliesUI(gameDiv, away, home);
+            });
+        }).catch(() => {});
+    }
+
+    liveEvents.forEach(({ event, leagueKey }) => {
+        const gameDiv = grid.querySelector(`[data-event-id="${event.id}"]`);
+        if(!gameDiv) return;
+
+        const comp = event.competitions[0];
+        const home = comp.competitors.find(t => t.homeAway === "home");
+        const away = comp.competitors.find(t => t.homeAway === "away");
+        const isLive = event.status.type.state === "in";
+        const isFinal = event.status.type.completed;
+
+        updateStatusUI(gameDiv, event, leagueKey);
+
+        const [topTeam, bottomTeam] = getSortedTeams(home, away);
+        updateScoreLines(gameDiv, topTeam, bottomTeam, isLive, isFinal);
+        updateScoreboardTable(gameDiv, away, home);
+
+        gameStateMap[event.id] = buildGameState(event);
+    });
+}
+
 async function refreshLiveGames(){
     if(refreshInFlight) return;
     refreshInFlight = true;
 
     try {
         if(currentLeague === "LIVE"){
-            // Multiple leagues are aggregated on this tab, so a full
-            // reload is simplest/safest rather than diffing per-league.
-            await loadGames();
+            await refreshAllLiveGames();
             return;
         }
 
