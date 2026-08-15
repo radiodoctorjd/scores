@@ -2300,20 +2300,50 @@ function renderGame(event, grid, leagueKey = currentLeague, opts = {}){
     gameStateMap[event.id] = buildGameState(event);
 }
 
+// ESPN buckets each event under a single "date" that doesn't always match
+// the viewer's local calendar day (early/late games, timezone rounding,
+// etc). The per-league tabs already account for this by checking today,
+// tomorrow, and yesterday and de-duping by event id - the Live tab needs
+// the same three-day window or it can miss games that the league tabs
+// find just fine.
+async function fetchLiveScoreboardEvents(leagueKey){
+    const endpoint = leagues[leagueKey];
+    const groups = leagueKey === 'NCAAMB' ? '&groups=50' : '';
+    const offsets = [0, -1, 1];
+    const seen = new Set();
+    const events = [];
+    let anySuccess = false;
+
+    for(const offset of offsets){
+        try {
+            const res = await fetchWithTimeout(
+                `https://site.api.espn.com/apis/site/v2/sports/${endpoint}/scoreboard?dates=${getDate(offset)}${groups}`,
+                8000
+            );
+            if(!res.ok) continue;
+            const data = await res.json();
+            anySuccess = true;
+            (data.events || []).forEach(e => {
+                if(e?.id && !seen.has(e.id)){
+                    seen.add(e.id);
+                    events.push(e);
+                }
+            });
+        } catch (err) {
+            console.warn(`[Live] ${leagueKey} offset ${offset} fetch failed:`, err?.message || err);
+        }
+    }
+
+    return { events, ok: anySuccess };
+}
+
 async function loadAllLiveGames(){
     const leagueKeys = Object.keys(leagues);
 
     const results = await Promise.all(leagueKeys.map(async (leagueKey) => {
         try {
-            const endpoint = leagues[leagueKey];
-            const groups = leagueKey === 'NCAAMB' ? '&groups=50' : '';
-            const res = await fetchWithTimeout(
-                `https://site.api.espn.com/apis/site/v2/sports/${endpoint}/scoreboard?dates=${getDate(0)}${groups}`,
-                8000
-            );
-            if(!res.ok) return [];
-            const data = await res.json();
-            return (data.events || [])
+            const { events } = await fetchLiveScoreboardEvents(leagueKey);
+            return events
                 .filter(e => e?.status?.type?.state === "in")
                 .map(e => ({ event: e, leagueKey }));
         } catch (err) {
@@ -2465,23 +2495,11 @@ async function refreshAllLiveGames(){
     const leagueKeys = Object.keys(leagues);
 
     const results = await Promise.all(leagueKeys.map(async (leagueKey) => {
-        try {
-            const endpoint = leagues[leagueKey];
-            const groups = leagueKey === 'NCAAMB' ? '&groups=50' : '';
-            const res = await fetchWithTimeout(
-                `https://site.api.espn.com/apis/site/v2/sports/${endpoint}/scoreboard?dates=${getDate(0)}${groups}`,
-                8000
-            );
-            if(!res.ok){
-                console.warn(`[Live] ${leagueKey} refresh responded ${res.status} - leaving its cards as-is this cycle.`);
-                return { leagueKey, ok: false, events: [] };
-            }
-            const data = await res.json();
-            return { leagueKey, ok: true, events: (data.events || []).map(e => ({ event: e, leagueKey })) };
-        } catch (err) {
-            console.warn(`[Live] ${leagueKey} refresh fetch failed - leaving its cards as-is this cycle:`, err?.message || err);
-            return { leagueKey, ok: false, events: [] };
+        const { events, ok } = await fetchLiveScoreboardEvents(leagueKey);
+        if(!ok){
+            console.warn(`[Live] ${leagueKey} refresh failed across all date windows - leaving its cards as-is this cycle.`);
         }
+        return { leagueKey, ok, events: events.map(e => ({ event: e, leagueKey })) };
     }));
 
     const failedLeagues = new Set(results.filter(r => !r.ok).map(r => r.leagueKey));
