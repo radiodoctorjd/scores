@@ -587,19 +587,71 @@ async function fetchSiriusXMSchedule(leagueKey){
     return siriusXMScheduleFetchPromises[leagueKey];
 }
 
-function findTeamChannelInText(scheduleText, teamNames){
-    if(!scheduleText) return null;
+// SiriusXM's schedule page lists each game as: away team name/logo, then
+// the literal word "Away" next to its channel number(s), then the home
+// team name/logo, then the literal word "Home" next to its channel
+// number(s) (sometimes followed by an "Espanol" feed). So rather than just
+// grabbing the nearest "CH ###" after a team name (which can grab the
+// wrong team's channel when both teams are close together), we first find
+// the text window that contains *both* team names close together - i.e.
+// this specific game's listing - then use the "Away"/"Home" labels inside
+// that window to correctly split the channel numbers between the two teams.
+function findGameScheduleWindow(scheduleText, awayNames, homeNames){
     const normalizedText = scheduleText.replace(/\s+/g, ' ');
+    const WINDOW_RADIUS = 700;
 
-    for(const name of teamNames){
-        if(!name) continue;
-        const idx = normalizedText.indexOf(name);
-        if(idx === -1) continue;
-        const window = normalizedText.slice(idx, idx + 150);
-        const chMatch = window.match(/CH(?:ANNEL)?\.?\s*#?\s*(\d{2,4})/i);
-        if(chMatch) return chMatch[1];
+    for(const aName of awayNames){
+        if(!aName) continue;
+        let searchFrom = 0;
+        let aIdx;
+        while((aIdx = normalizedText.indexOf(aName, searchFrom)) !== -1){
+            const slice = normalizedText.slice(aIdx, Math.min(normalizedText.length, aIdx + WINDOW_RADIUS));
+
+            for(const hName of homeNames){
+                if(hName && slice.includes(hName)){
+                    return slice;
+                }
+            }
+
+            searchFrom = aIdx + aName.length;
+        }
     }
+
     return null;
+}
+
+function extractAwayHomeChannels(windowText){
+    const awayLabelIdx = windowText.search(/\bAway\b/i);
+    const homeLabelIdx = windowText.search(/\bHome\b/i);
+
+    const chRegex = /CH(?:ANNEL)?\.?\s*#?\s*(\d{2,4})/gi;
+    let match;
+    let awayCh = null;
+    let homeCh = null;
+
+    while((match = chRegex.exec(windowText)) !== null){
+        const pos = match.index;
+        if(awayLabelIdx !== -1 && pos > awayLabelIdx && (homeLabelIdx === -1 || pos < homeLabelIdx) && awayCh === null){
+            awayCh = match[1];
+        } else if(homeLabelIdx !== -1 && pos > homeLabelIdx && homeCh === null){
+            homeCh = match[1];
+        }
+    }
+
+    // Fallback: no "Away"/"Home" labels found (format changed?) - just take
+    // the first two channel numbers in listed order.
+    if(awayCh === null && homeCh === null){
+        const all = [];
+        let m;
+        chRegex.lastIndex = 0;
+        while((m = chRegex.exec(windowText)) !== null){
+            all.push(m[1]);
+        }
+        awayCh = all[0] || null;
+        homeCh = all[1] || null;
+    }
+
+    return { awayCh, homeCh };
 }
 
 async function getGameSpecificRadioInfo(home, away, leagueKey){
@@ -609,11 +661,16 @@ async function getGameSpecificRadioInfo(home, away, leagueKey){
     const awayNames = [away.team.displayName, away.team.shortDisplayName, away.team.name, away.team.location].filter(Boolean);
     const homeNames = [home.team.displayName, home.team.shortDisplayName, home.team.name, home.team.location].filter(Boolean);
 
-    const awayCh = findTeamChannelInText(scheduleText, awayNames);
-    const homeCh = findTeamChannelInText(scheduleText, homeNames);
+    const gameWindow = findGameScheduleWindow(scheduleText, awayNames, homeNames);
+    if(!gameWindow){
+        console.log(`[SiriusXM] fetched ${leagueKey} schedule (${scheduleText.length} chars) but couldn't find a listing containing both "${away.team.displayName}" and "${home.team.displayName}"`);
+        return null;
+    }
+
+    const { awayCh, homeCh } = extractAwayHomeChannels(gameWindow);
 
     if(!awayCh && !homeCh){
-        console.log(`[SiriusXM] fetched ${leagueKey} schedule (${scheduleText.length} chars) but couldn't match "${away.team.displayName}" / "${home.team.displayName}"`);
+        console.log(`[SiriusXM] found ${away.team.displayName} @ ${home.team.displayName} in the ${leagueKey} schedule but no channel numbers nearby`);
         return null;
     }
 
