@@ -12,7 +12,7 @@ header { padding:15px; text-align:center; font-size:24px; font-weight:bold; back
 
 .tabs { display:flex; overflow-x:auto; background:#1e293b; position:sticky; top:0; z-index:1000; }
 .tab { padding:12px 18px; cursor:pointer; display:flex; align-items:center; white-space:nowrap; }
-.tab img { width:20px; margin-right:6px; }
+.tab img { width:20px; height:20px; object-fit:contain; margin-right:6px; vertical-align:middle; flex:0 0 auto; }
 .tab.active { border-bottom:3px solid #38bdf8; background:#0f172a; }
 
 .section-title { text-align:center; font-weight:bold; margin:10px 0; }
@@ -60,7 +60,7 @@ header { padding:15px; text-align:center; font-size:24px; font-weight:bold; back
 .game { background:white; color:black; padding:14px; border-radius:14px; box-shadow:0 8px 24px rgba(2,6,23,0.12); }
 
 .team-line { display:flex; align-items:center; gap:8px; font-weight:800; font-size:16px; line-height:1.2; }
-.team-line img { width:26px; flex:0 0 auto; }
+.team-line img { width:26px; height:26px; object-fit:contain; flex:0 0 auto; }
 
 .matchup-text { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
 .matchup-at { opacity:0.65; font-weight:700; }
@@ -515,6 +515,52 @@ let siriusXMScheduleCache = {};
 let siriusXMScheduleCacheTime = {};
 let siriusXMScheduleFetchPromises = {};
 
+// SiriusXM's site is bot-protected and the schedule is rendered client-side,
+// so a plain CORS proxy that just re-fetches the raw HTML often comes back
+// empty or blocked. r.jina.ai actually renders the page (like a headless
+// browser) before handing back text, so it's tried first here and given a
+// much longer timeout; the others are kept as a fallback chain. Every step
+// logs to the console (look for "[SiriusXM]") so it's obvious which attempt
+// succeeded or failed if the per-game channel isn't showing up.
+async function fetchSiriusXMPageText(url){
+    const candidates = [
+        { label: 'r.jina.ai', fetchUrl: `https://r.jina.ai/${url}`, timeoutMs: 20000 },
+        { label: 'allorigins-raw', fetchUrl: `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`, timeoutMs: 8000 },
+        { label: 'allorigins-get', fetchUrl: `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`, timeoutMs: 8000, isJson: true },
+        { label: 'direct', fetchUrl: url, timeoutMs: 6000 }
+    ];
+
+    for(const candidate of candidates){
+        try {
+            const res = await fetchWithTimeout(candidate.fetchUrl, candidate.timeoutMs);
+            if(!res.ok){
+                console.log(`[SiriusXM] ${candidate.label} responded ${res.status} for ${url}`);
+                continue;
+            }
+
+            let body = '';
+            if(candidate.isJson){
+                const data = await res.json();
+                body = data?.contents || '';
+            } else {
+                body = await res.text();
+            }
+
+            if(body && body.length > 200){
+                console.log(`[SiriusXM] ${candidate.label} returned ${body.length} chars for ${url}`);
+                return body;
+            }
+
+            console.log(`[SiriusXM] ${candidate.label} returned too little content (${body.length} chars) for ${url}`);
+        } catch (err) {
+            console.log(`[SiriusXM] ${candidate.label} failed for ${url}:`, err?.message || err);
+        }
+    }
+
+    console.log(`[SiriusXM] all fetch attempts failed for ${url}`);
+    return '';
+}
+
 async function fetchSiriusXMSchedule(leagueKey){
     const slug = siriusXMScheduleSlugs[leagueKey];
     if(!slug) return null;
@@ -526,7 +572,7 @@ async function fetchSiriusXMSchedule(leagueKey){
     if(!siriusXMScheduleFetchPromises[leagueKey]){
         siriusXMScheduleFetchPromises[leagueKey] = (async () => {
             try {
-                const text = await fetchTextWithFallback(`https://www.siriusxm.com/sports/${slug}`);
+                const text = await fetchSiriusXMPageText(`https://www.siriusxm.com/sports/${slug}`);
                 siriusXMScheduleCache[leagueKey] = text || null;
                 siriusXMScheduleCacheTime[leagueKey] = Date.now();
             } catch (err) {
@@ -550,7 +596,7 @@ function findTeamChannelInText(scheduleText, teamNames){
         const idx = normalizedText.indexOf(name);
         if(idx === -1) continue;
         const window = normalizedText.slice(idx, idx + 150);
-        const chMatch = window.match(/CH\.?\s*#?\s*(\d{2,4})/i);
+        const chMatch = window.match(/CH(?:ANNEL)?\.?\s*#?\s*(\d{2,4})/i);
         if(chMatch) return chMatch[1];
     }
     return null;
@@ -566,7 +612,10 @@ async function getGameSpecificRadioInfo(home, away, leagueKey){
     const awayCh = findTeamChannelInText(scheduleText, awayNames);
     const homeCh = findTeamChannelInText(scheduleText, homeNames);
 
-    if(!awayCh && !homeCh) return null;
+    if(!awayCh && !homeCh){
+        console.log(`[SiriusXM] fetched ${leagueKey} schedule (${scheduleText.length} chars) but couldn't match "${away.team.displayName}" / "${home.team.displayName}"`);
+        return null;
+    }
 
     const parts = [];
     if(awayCh) parts.push(`${away.team.abbreviation}: Ch. ${awayCh}`);
