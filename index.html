@@ -522,15 +522,35 @@ let siriusXMScheduleFetchPromises = {};
 // much longer timeout; the others are kept as a fallback chain. Every step
 // logs to the console (look for "[SiriusXM]") so it's obvious which attempt
 // succeeded or failed if the per-game channel isn't showing up.
+function sleep(ms){
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 async function fetchSiriusXMPageText(url){
+    // r.jina.ai is the only one of these that actually renders SiriusXM's
+    // JS-heavy page before returning text - a plain CORS proxy just gets
+    // the empty pre-render shell, and a direct browser fetch is blocked by
+    // CORS outright (siriusxm.com sends no Access-Control-Allow-Origin
+    // header). But r.jina.ai itself is inconsistent against sites with bot
+    // protection - sometimes it gets the real page, sometimes it gets
+    // caught and returns a tiny stub - so it's retried a couple of times
+    // with a short pause before falling back to the other proxies (which
+    // will likely also fail, but cost little to try).
     const candidates = [
-        { label: 'r.jina.ai', fetchUrl: `https://r.jina.ai/${url}`, timeoutMs: 20000 },
+        { label: 'r.jina.ai (attempt 1)', fetchUrl: `https://r.jina.ai/${url}`, timeoutMs: 20000 },
+        { label: 'r.jina.ai (attempt 2)', fetchUrl: `https://r.jina.ai/${url}`, timeoutMs: 20000, delayBeforeMs: 2500 },
+        { label: 'r.jina.ai (attempt 3)', fetchUrl: `https://r.jina.ai/${url}`, timeoutMs: 20000, delayBeforeMs: 4000 },
+        { label: 'corsproxy.io', fetchUrl: `https://corsproxy.io/?url=${encodeURIComponent(url)}`, timeoutMs: 8000 },
         { label: 'allorigins-raw', fetchUrl: `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`, timeoutMs: 8000 },
         { label: 'allorigins-get', fetchUrl: `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`, timeoutMs: 8000, isJson: true },
         { label: 'direct', fetchUrl: url, timeoutMs: 6000 }
     ];
 
     for(const candidate of candidates){
+        if(candidate.delayBeforeMs){
+            await sleep(candidate.delayBeforeMs);
+        }
+
         try {
             const res = await fetchWithTimeout(candidate.fetchUrl, candidate.timeoutMs);
             if(!res.ok){
@@ -546,7 +566,7 @@ async function fetchSiriusXMPageText(url){
                 body = await res.text();
             }
 
-            if(body && body.length > 200){
+            if(body && body.length > 1000){
                 console.log(`[SiriusXM] ${candidate.label} returned ${body.length} chars for ${url}`);
                 return body;
             }
@@ -566,7 +586,12 @@ async function fetchSiriusXMSchedule(leagueKey){
     if(!slug) return null;
 
     const now = Date.now();
-    const cacheIsFresh = siriusXMScheduleCacheTime[leagueKey] && (now - siriusXMScheduleCacheTime[leagueKey] < 30 * 60 * 1000);
+    // Successful fetches stay cached for 30 min. A failed fetch is only
+    // "cached" for 3 min - long enough to avoid hammering the proxies on
+    // every game render, but short enough that the next refresh cycle or
+    // so gets a real retry instead of being locked out for half an hour.
+    const freshWindowMs = siriusXMScheduleCache[leagueKey] ? 30 * 60 * 1000 : 3 * 60 * 1000;
+    const cacheIsFresh = siriusXMScheduleCacheTime[leagueKey] && (now - siriusXMScheduleCacheTime[leagueKey] < freshWindowMs);
     if(cacheIsFresh) return siriusXMScheduleCache[leagueKey];
 
     if(!siriusXMScheduleFetchPromises[leagueKey]){
