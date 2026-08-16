@@ -536,10 +536,19 @@ async function fetchSiriusXMPageText(url){
     // caught and returns a tiny stub - so it's retried a couple of times
     // with a short pause before falling back to the other proxies (which
     // will likely also fail, but cost little to try).
+    // Each jina attempt uses a cache-busted target URL (a harmless extra
+    // query param SiriusXM's server just ignores) so a bad/blocked response
+    // r.jina.ai may have cached for the exact original URL doesn't get
+    // served back to us again on retry - each attempt forces a fresh fetch.
+    const jinaAttempts = [0, 2000, 4500, 7000, 10000].map((delayBeforeMs, i) => ({
+        label: `r.jina.ai (attempt ${i + 1})`,
+        fetchUrl: `https://r.jina.ai/${url}${url.includes('?') ? '&' : '?'}_cb=${i}`,
+        timeoutMs: 20000,
+        delayBeforeMs
+    }));
+
     const candidates = [
-        { label: 'r.jina.ai (attempt 1)', fetchUrl: `https://r.jina.ai/${url}`, timeoutMs: 20000 },
-        { label: 'r.jina.ai (attempt 2)', fetchUrl: `https://r.jina.ai/${url}`, timeoutMs: 20000, delayBeforeMs: 2500 },
-        { label: 'r.jina.ai (attempt 3)', fetchUrl: `https://r.jina.ai/${url}`, timeoutMs: 20000, delayBeforeMs: 4000 },
+        ...jinaAttempts,
         { label: 'corsproxy.io', fetchUrl: `https://corsproxy.io/?url=${encodeURIComponent(url)}`, timeoutMs: 8000 },
         { label: 'allorigins-raw', fetchUrl: `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`, timeoutMs: 8000 },
         { label: 'allorigins-get', fetchUrl: `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`, timeoutMs: 8000, isJson: true },
