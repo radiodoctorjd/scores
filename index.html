@@ -1562,6 +1562,11 @@ function buildGameState(event){
         onFirst: bases.first,
         onSecond: bases.second,
         onThird: bases.third,
+        down: situation.down ?? null,
+        distance: situation.distance ?? null,
+        possession: situation.possession ?? null,
+        possessionText: situation.possessionText ?? null,
+        shortDownDistanceText: situation.shortDownDistanceText ?? null,
         homeLines: (home.linescores || []).map(ls => ({
             period: ls.period ?? null,
             value: ls.value ?? "",
@@ -1585,6 +1590,15 @@ function formatGameTime(dateString){
     return new Date(dateString).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
 }
 
+function getPossessionAbbr(event, situation){
+    const possessionId = situation?.possession;
+    if(!possessionId) return null;
+
+    const comp = event.competitions?.[0];
+    const competitor = comp?.competitors?.find(c => c.id === possessionId || c.team?.id === possessionId);
+    return competitor?.team?.abbreviation || null;
+}
+
 function getStatusText(event, leagueKey = currentLeague){
     const situation = getSituation(event);
     const isFinal = event.status.type.completed;
@@ -1598,6 +1612,25 @@ function getStatusText(event, leagueKey = currentLeague){
         inningText = event.status.type.detail || event.status.type.shortDetail || "Live";
     } else {
         return `<strong>${formatGameTime(event.date)}</strong>`;
+    }
+
+    if(leagueKey === "NFL" && isLive){
+        const downDistance = situation.shortDownDistanceText || situation.downDistanceText || null;
+        const fieldPosition = situation.possessionText || null;
+        const possAbbr = getPossessionAbbr(event, situation);
+
+        if(downDistance || fieldPosition){
+            const playLine = [possAbbr, downDistance, fieldPosition]
+                .filter(Boolean)
+                .join(" ");
+
+            return `
+                <span class="status-line"><strong>${inningText}</strong></span>
+                <span class="status-line">${playLine}</span>
+            `;
+        }
+
+        return `<span class="status-line"><strong>${inningText}</strong></span>`;
     }
 
     if(leagueKey === "MLB" && isLive){
