@@ -1614,7 +1614,7 @@ function getStatusText(event, leagueKey = currentLeague){
         return `<strong>${formatGameTime(event.date)}</strong>`;
     }
 
-    if(leagueKey === "NFL" && isLive){
+    if((leagueKey === "NFL" || leagueKey === "NCAAFB") && isLive){
         const downDistance = situation.shortDownDistanceText || situation.downDistanceText || null;
         const fieldPosition = situation.possessionText || null;
         const possAbbr = getPossessionAbbr(event, situation);
