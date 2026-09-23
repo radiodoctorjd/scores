@@ -906,6 +906,54 @@ async function fetchTextWithFallback(url){
     return "";
 }
 
+// api-web.nhle.com does not send Access-Control-Allow-Origin, so a plain
+// browser fetch() to it is blocked outright (net::ERR_FAILED, even though
+// the request itself succeeds server-side) - confirmed directly from the
+// console on the deployed page, not assumed. Every NHL API call this file
+// makes therefore has to go through a CORS proxy, the same way the
+// SiriusXM scraping already does. r.jina.ai renders pages as text/markdown
+// (fine for scraping HTML, but it can mangle raw JSON), so for JSON
+// endpoints we skip it and go straight to allorigins's two modes, then a
+// direct attempt last (in case CORS policy ever changes).
+function buildJsonProxyUrls(url){
+    return [
+        `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+        `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
+        `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
+        url
+    ];
+}
+
+async function fetchJsonWithFallback(url){
+    for(const candidate of buildJsonProxyUrls(url)){
+        try {
+            const res = await fetchWithTimeout(candidate, 7000);
+            if(!res.ok){
+                console.log(`[NHL Goalie] proxy attempt responded ${res.status} for ${url} via ${candidate.split('?')[0]}`);
+                continue;
+            }
+            if(candidate.includes('/get?url=')){
+                const wrapper = await res.json();
+                if(wrapper?.contents){
+                    try {
+                        return JSON.parse(wrapper.contents);
+                    } catch (parseErr) {
+                        console.log(`[NHL Goalie] allorigins /get returned non-JSON contents for ${url}`);
+                        continue;
+                    }
+                }
+                continue;
+            }
+            const data = await res.json();
+            if(data) return data;
+        } catch (err) {
+            console.log(`[NHL Goalie] proxy attempt failed for ${url} via ${candidate.split('?')[0]}:`, err?.message || err);
+        }
+    }
+    console.log(`[NHL Goalie] all proxy attempts failed for ${url}`);
+    return null;
+}
+
 
 function getWinnerAbbreviation(event){
     const comp = event?.competitions?.[0];
@@ -1009,16 +1057,25 @@ async function fetchLeagueRecentForm(){
 }
 
 
-// --- NHL goalie data - straight from the NHL's own public API -----------
+// --- NHL goalie data - from the NHL's own public API, via a CORS proxy --
 // This used to scrape a third-party "starting goalies" page through a chain
-// of CORS proxies (r.jina.ai, corsproxy.io, allorigins). That's exactly the
-// kind of thing that silently breaks: any one of those free proxies going
-// down, getting rate-limited, or getting blocked means goalies just vanish
-// from the page with no obvious cause.
+// of CORS proxies (r.jina.ai, corsproxy.io, allorigins). That reintroduced
+// a different problem: the source was a scraped webpage, not real data, so
+// it was just as easy to break.
 //
 // api-web.nhle.com is the NHL's own public API - the same one nhl.com's
-// website itself calls - and it sends CORS headers that allow browser
-// fetches directly, so no proxy is needed at all.
+// website itself calls - and returns real structured data, but (confirmed
+// directly from a live browser console, not assumed) it does NOT send an
+// Access-Control-Allow-Origin header. That means a plain client-side
+// fetch() to it from a page hosted elsewhere (like this one on GitHub
+// Pages) gets silently blocked by the browser as net::ERR_FAILED, even
+// though the request succeeds on the NHL's end (the console shows "200
+// (OK)" right next to the "failed" line - that combination is the
+// telltale sign of a missing CORS header, not a real network problem).
+// So every call to it here goes through the same CORS-proxy fallback
+// chain (allorigins, corsproxy.io) already used elsewhere in this file -
+// the data itself is now the NHL's official numbers, just relayed through
+// a proxy the same way the SiriusXM scraping already had to be.
 //
 // Approach:
 //   1. Pull today's (and yesterday's/tomorrow's, to match how the rest of
@@ -1216,12 +1273,11 @@ async function fetchOneGameGoalies(gameId, gameState){
 
     try {
         if(isLiveOrFinal){
-            const res = await fetchWithTimeout(`https://api-web.nhle.com/v1/gamecenter/${gameId}/boxscore`, 6000);
-            if(!res.ok){
-                console.log(`[NHL Goalie] boxscore fetch for game ${gameId} responded ${res.status}`);
+            const boxscore = await fetchJsonWithFallback(`https://api-web.nhle.com/v1/gamecenter/${gameId}/boxscore`);
+            if(!boxscore){
+                console.log(`[NHL Goalie] boxscore fetch failed for game ${gameId}`);
                 return null;
             }
-            const boxscore = await res.json();
             return extractBoxscoreGoaliesBothSides(boxscore);
         }
 
@@ -1231,12 +1287,11 @@ async function fetchOneGameGoalies(gameId, gameState){
         // back null and the UI shows TBD - there's no third-party source to
         // backfill it from that wouldn't reintroduce the scraping fragility
         // we're trying to avoid.
-        const res = await fetchWithTimeout(`https://api-web.nhle.com/v1/gamecenter/${gameId}/landing`, 6000);
-        if(!res.ok){
-            console.log(`[NHL Goalie] landing fetch for game ${gameId} responded ${res.status}`);
+        const landing = await fetchJsonWithFallback(`https://api-web.nhle.com/v1/gamecenter/${gameId}/landing`);
+        if(!landing){
+            console.log(`[NHL Goalie] landing fetch failed for game ${gameId}`);
             return null;
         }
-        const landing = await res.json();
 
         const awayRaw = findLandingGoalieRaw(landing, 'away');
         const homeRaw = findLandingGoalieRaw(landing, 'home');
@@ -1273,9 +1328,7 @@ async function fetchNHLGoalies(forceRefresh = false, leagueKey = currentLeague){
         const dates = [nhlnowDateISO(-1), nhlnowDateISO(0), nhlnowDateISO(1)];
         const scheduleResponses = await Promise.all(
             dates.map(date =>
-                fetchWithTimeout(`https://api-web.nhle.com/v1/schedule/${date}`, 6000)
-                    .then(res => res.ok ? res.json() : null)
-                    .catch(() => null)
+                fetchJsonWithFallback(`https://api-web.nhle.com/v1/schedule/${date}`)
             )
         );
 
