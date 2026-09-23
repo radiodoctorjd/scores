@@ -1052,30 +1052,33 @@ function nhlnowDateISO(offsetDays = 0){
     return `${yyyy}-${mm}-${dd}`;
 }
 
-function formatGoalieRecord(goalie){
-    if(!goalie) return '';
-    const w = goalie.wins;
-    const l = goalie.losses;
-    const otl = goalie.otLosses;
-    if(w == null && l == null) return '';
-    return `${w ?? 0}-${l ?? 0}${otl != null ? `-${otl}` : ''}`;
-}
-
-// The NHL API reports save percentage as a 0-1 decimal (e.g. 0.912) and GAA
-// as a plain number (e.g. 2.47) - we just format them for display here.
-function formatGaa(value){
-    if(value == null || Number.isNaN(Number(value))) return '';
-    return Number(value).toFixed(2);
-}
-
+// Confirmed against the NHL API's actual GoalieStats shape: saves and shots
+// against for a game are reported together as one string like "27/29" via
+// saveShotsAgainst, not as separate saves/shots fields, and savePctg is a
+// single 0-1 decimal (e.g. 0.931). There is no game-log win/loss record or
+// GAA on a boxscore goalie line at all (GAA is a season-long stat computed
+// elsewhere) - so we build our display "record" from the game's decision
+// (win/loss/OT loss) instead of a manufactured record, and show a shots
+// line rather than a fabricated GAA.
 function formatSvPct(value){
     if(value == null || Number.isNaN(Number(value))) return '';
     return Number(value).toFixed(3).replace(/^0\./, '.');
 }
 
+function formatDecision(decision){
+    const d = String(decision || '').toUpperCase();
+    if(d === 'W') return 'W';
+    if(d === 'L') return 'L';
+    if(d === 'O' || d === 'OT') return 'OTL';
+    return '';
+}
+
 // Turns one of the NHL API's player objects (from landing.matchup.goalieComparison
 // or from a boxscore playerByGameStats goalie entry) into the simple shape
 // the rest of this file's goalie UI code expects: { name, status, record, gaa, svPct }.
+// "record" and "gaa" are repurposed here as this-game's decision and
+// saves/shots line respectively, since a boxscore goalie entry doesn't carry
+// a season GAA or win-loss record - see comment above.
 function normalizeNhlGoalieEntry(raw, status){
     if(!raw) return null;
 
@@ -1087,24 +1090,125 @@ function normalizeNhlGoalieEntry(raw, status){
     return {
         name,
         status: status || '',
-        record: formatGoalieRecord(raw),
-        gaa: formatGaa(raw.goalsAgainstAverage ?? raw.gaa),
-        svPct: formatSvPct(raw.savePercentage ?? raw.savePctg)
+        record: formatDecision(raw.decision),
+        gaa: raw.saveShotsAgainst || '',
+        svPct: formatSvPct(raw.savePctg)
     };
 }
 
-// Pulls the confirmed, currently-in-net goalie (with live stats) out of a
-// boxscore's playerByGameStats for one side ("awayTeam" / "homeTeam").
-function extractBoxscoreStartingGoalie(boxscore, sideKey){
-    const goalies = boxscore?.playerByGameStats?.[sideKey]?.goalies;
-    if(!Array.isArray(goalies) || !goalies.length) return null;
+// api-web.nhle.com is undocumented and has changed the exact container key
+// for per-player boxscore stats more than once (playerByGameStats vs
+// boxscore vs other nestings, awayTeam vs away, etc). Rather than bet on
+// one specific path and silently show nothing the moment the NHL renames
+// something, we walk the ENTIRE response looking for objects that are
+// clearly goalie stat lines - regardless of where they're nested - and use
+// which side of the boxscore tree they were found under to sort them into
+// away/home. This keeps working even if the NHL reshuffles container names,
+// and if the shape changes so much nothing matches, it logs a small dump of
+// what it did see so the real shape is easy to spot in the console.
+function looksLikeGoalieEntry(node){
+    if(!node || typeof node !== 'object' || Array.isArray(node)) return false;
+    const hasName = !!(node.name?.default || node.firstName || node.lastName);
+    if(!hasName) return false;
 
-    // The goalie who's actually played (has logged ice time) is the one
-    // who started - if for some reason none show ice time yet (e.g. the
-    // game just started), fall back to the first goalie listed, which the
-    // NHL API lists starter-first.
-    const withIce = goalies.find(g => g?.toi && g.toi !== '00:00') || goalies[0];
-    return normalizeNhlGoalieEntry(withIce, 'Confirmed');
+    const posRaw = node.position || node.positionCode || node.pos;
+    const pos = String(posRaw?.default ?? posRaw ?? '').toUpperCase();
+    if(pos === 'G' || pos === 'GOALIE' || pos === 'GOALTENDER') return true;
+
+    // Some shapes omit an explicit position on the stat line itself but the
+    // line does carry goalie-only stats (saves/shots-against/decision) -
+    // treat those as goalies too even without a position field.
+    const hasGoalieStat = ['saveShotsAgainst', 'savePctg', 'goalsAgainst', 'decision', 'shotsAgainst']
+        .some(key => node[key] !== undefined);
+    return hasGoalieStat;
+}
+
+// Recursively walks the boxscore JSON, collecting every goalie-shaped object
+// along with the path segments (object keys / array context) that led to
+// it, so we can tell which side of the tree ("away" vs "home") each one
+// came from without needing to know the exact container name in advance.
+function collectGoaliesWithSideHints(node, path, results, depth){
+    if(depth > 8 || !node || typeof node !== 'object') return;
+
+    if(looksLikeGoalieEntry(node)){
+        results.push({ entry: node, path: path.join('>') });
+        return; // a goalie entry's own children aren't worth descending into
+    }
+
+    if(Array.isArray(node)){
+        node.forEach((item, i) => collectGoaliesWithSideHints(item, path, results, depth + 1));
+        return;
+    }
+
+    Object.keys(node).forEach(key => {
+        collectGoaliesWithSideHints(node[key], [...path, key], results, depth + 1);
+    });
+}
+
+function sideFromPath(path, awayAbbr, homeAbbr){
+    const lower = path.toLowerCase();
+    // The path itself usually contains "awayTeam"/"homeTeam" or "away"/"home"
+    // as an object key somewhere on the way down to the goalie entry.
+    if(lower.includes('away')) return 'away';
+    if(lower.includes('home')) return 'home';
+    return null;
+}
+
+function extractBoxscoreGoaliesBothSides(boxscore){
+    const awayAbbr = boxscore?.awayTeam?.abbrev;
+    const homeAbbr = boxscore?.homeTeam?.abbrev;
+
+    const found = [];
+    collectGoaliesWithSideHints(boxscore, [], found, 0);
+
+    if(!found.length){
+        console.log(`[NHL Goalie] deep search found no goalie-shaped entries anywhere in the boxscore for game ${boxscore?.id}. Top-level keys:`, Object.keys(boxscore || {}));
+        return { away: null, home: null };
+    }
+
+    const bySide = { away: [], home: [] };
+    found.forEach(({ entry, path }) => {
+        const side = sideFromPath(path, awayAbbr, homeAbbr);
+        if(side) bySide[side].push(entry);
+    });
+
+    if(!bySide.away.length && !bySide.home.length){
+        console.log(`[NHL Goalie] found ${found.length} goalie-shaped entries for game ${boxscore?.id} but couldn't tell which side they belong to. Paths:`, found.map(f => f.path));
+        return { away: null, home: null };
+    }
+
+    // Prefer whichever goalie on each side has logged ice time (the actual
+    // starter/current netminder); fall back to the first one found.
+    const pick = (list) => {
+        if(!list.length) return null;
+        const withIce = list.find(g => g?.toi && g.toi !== '00:00');
+        return normalizeNhlGoalieEntry(withIce || list[0], 'Confirmed');
+    };
+
+    return { away: pick(bySide.away), home: pick(bySide.home) };
+}
+
+// Same idea for the pregame "landing" endpoint's projected-starter data -
+// the exact path under matchup has moved around (goalieComparison vs
+// goalieStats, leaders vs a flat array, awayTeam vs away), so try the
+// plausible variants first, then fall back to the same side-tagged deep
+// search used for the boxscore.
+function findLandingGoalieRaw(landing, side){
+    const sideKeys = side === 'away' ? ['awayTeam', 'away'] : ['homeTeam', 'home'];
+    const comparisonContainers = [
+        landing?.matchup?.goalieComparison,
+        landing?.matchup?.goalieStats,
+        landing?.matchup?.skaterComparison?.goalies
+    ].filter(Boolean);
+
+    for(const container of comparisonContainers){
+        for(const sideKey of sideKeys){
+            const entry = container?.[sideKey];
+            const candidate = entry?.leaders?.[0] || (Array.isArray(entry) ? entry[0] : null);
+            if(candidate) return candidate;
+        }
+    }
+    return null;
 }
 
 async function fetchOneGameGoalies(gameId, gameState){
@@ -1113,27 +1217,32 @@ async function fetchOneGameGoalies(gameId, gameState){
     try {
         if(isLiveOrFinal){
             const res = await fetchWithTimeout(`https://api-web.nhle.com/v1/gamecenter/${gameId}/boxscore`, 6000);
-            if(!res.ok) return null;
+            if(!res.ok){
+                console.log(`[NHL Goalie] boxscore fetch for game ${gameId} responded ${res.status}`);
+                return null;
+            }
             const boxscore = await res.json();
-            return {
-                away: extractBoxscoreStartingGoalie(boxscore, 'awayTeam'),
-                home: extractBoxscoreStartingGoalie(boxscore, 'homeTeam')
-            };
+            return extractBoxscoreGoaliesBothSides(boxscore);
         }
 
         // Pregame: the "landing" endpoint carries each team's projected
         // starter once the NHL has published one (usually a few hours
-        // before puck drop) under matchup.goalieComparison. Before that's
-        // published, these will just come back null and the UI shows TBD -
-        // there's no third-party source to backfill it from that wouldn't
-        // reintroduce the same scraping fragility we're trying to avoid.
+        // before puck drop). Before that's published, these will just come
+        // back null and the UI shows TBD - there's no third-party source to
+        // backfill it from that wouldn't reintroduce the scraping fragility
+        // we're trying to avoid.
         const res = await fetchWithTimeout(`https://api-web.nhle.com/v1/gamecenter/${gameId}/landing`, 6000);
-        if(!res.ok) return null;
+        if(!res.ok){
+            console.log(`[NHL Goalie] landing fetch for game ${gameId} responded ${res.status}`);
+            return null;
+        }
         const landing = await res.json();
 
-        const comparison = landing?.matchup?.goalieComparison;
-        const awayRaw = comparison?.awayTeam?.leaders?.[0] || comparison?.awayTeam?.[0] || null;
-        const homeRaw = comparison?.homeTeam?.leaders?.[0] || comparison?.homeTeam?.[0] || null;
+        const awayRaw = findLandingGoalieRaw(landing, 'away');
+        const homeRaw = findLandingGoalieRaw(landing, 'home');
+        if(!awayRaw && !homeRaw){
+            console.log(`[NHL Goalie] no projected starters found yet in landing for game ${gameId} (matchup keys:`, Object.keys(landing?.matchup || {}), ') - normal if this is well before puck drop.');
+        }
 
         return {
             away: normalizeNhlGoalieEntry(awayRaw, awayRaw ? 'Projected' : ''),
@@ -1217,7 +1326,7 @@ function formatGoalie(goalie, omitStatus){
 
     const parts = [];
     if(goalie.record) parts.push(goalie.record);
-    if(goalie.gaa) parts.push(`${goalie.gaa} GAA`);
+    if(goalie.gaa) parts.push(`${goalie.gaa} SA`);
     if(goalie.svPct) parts.push(`${goalie.svPct} SV%`);
 
     const statText = parts.length ? ` (${parts.join(', ')})` : '';
@@ -1229,27 +1338,16 @@ function formatGoalie(goalie, omitStatus){
 function goalieStrengthScore(goalie){
     if(!goalie || !goalie.name) return null;
 
-    const gaa = parseFloat(String(goalie.gaa || '').replace(/[^\d.]/g, ''));
+    // A boxscore goalie line has no season GAA to compare with - the only
+    // real quality signal available here is this game's save percentage.
     const svPctRaw = String(goalie.svPct || '').trim();
     let svPct = parseFloat(svPctRaw.replace(/[^\d.]/g, ''));
     if(!Number.isNaN(svPct) && svPct > 1.5){
         svPct = svPct / 1000;
     }
 
-    let score = 0;
-    let parts = 0;
-
-    if(!Number.isNaN(gaa)){
-        score += Math.max(0, 5 - gaa) * 25;
-        parts += 1;
-    }
-
-    if(!Number.isNaN(svPct)){
-        score += Math.max(0, (svPct - 0.850)) * 1000;
-        parts += 1;
-    }
-
-    return parts ? score : null;
+    if(Number.isNaN(svPct)) return null;
+    return Math.max(0, (svPct - 0.850)) * 1000;
 }
 
 function getGoalieAdvantage(goalieA, goalieB){
