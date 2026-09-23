@@ -882,51 +882,27 @@ function buildTextProxyUrls(url){
     const u = new URL(url);
     const noScheme = `${u.host}${u.pathname}${u.search}`;
     return [
+        url,
         `https://r.jina.ai/http://${noScheme}`,
         `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-        `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
-        url
+        `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`
     ];
 }
 
-// A "successful" response isn't necessarily a useful one: r.jina.ai in
-// particular can return a real 200 with a tiny stub (a bot-check page, a
-// consent wall, an error message) instead of the site's actual content.
-// Without a minimum-length check, that stub gets accepted as if it were
-// the real page, short-circuits the rest of the fallback chain, and every
-// later parse silently finds 0 matches - which is exactly what was
-// happening here (the same fixed ~5000-char non-page came back on every
-// single attempt). The SiriusXM scraper already guards against this with
-// a length check; this applies the same guard here.
-const MIN_USEFUL_BODY_LENGTH = 2000;
-
-async function fetchTextWithFallback(url, label = 'fetchTextWithFallback'){
+async function fetchTextWithFallback(url){
     for(const candidate of buildTextProxyUrls(url)){
         try {
-            const res = await fetchWithTimeout(candidate, candidate.includes('r.jina.ai') ? 10000 : 6000);
-            if(!res.ok){
-                console.log(`[${label}] proxy attempt responded ${res.status} for ${url} via ${candidate.split('?')[0]}`);
-                continue;
-            }
-
-            let body = '';
+            const res = await fetchWithTimeout(candidate, candidate.includes('r.jina.ai') ? 8000 : 5000);
+            if(!res.ok) continue;
             if(candidate.includes('/get?url=')){
                 const data = await res.json();
-                body = data?.contents || '';
+                if(data?.contents) return data.contents;
             } else {
-                body = await res.text();
+                const body = await res.text();
+                if(body) return body;
             }
-
-            if(body && body.length >= MIN_USEFUL_BODY_LENGTH){
-                console.log(`[${label}] ${candidate.split('?')[0]} returned ${body.length} chars for ${url}`);
-                return body;
-            }
-            console.log(`[${label}] ${candidate.split('?')[0]} returned too little content (${body.length} chars) for ${url} - trying next proxy`);
-        } catch (err) {
-            console.log(`[${label}] proxy attempt failed for ${url} via ${candidate.split('?')[0]}:`, err?.message || err);
-        }
+        } catch (err) {}
     }
-    console.log(`[${label}] all proxy attempts failed for ${url}`);
     return "";
 }
 
@@ -1033,26 +1009,6 @@ async function fetchLeagueRecentForm(){
 }
 
 
-// --- NHL goalie data - scraped from DailyFantasyFuel, via CORS proxies --
-// api-web.nhle.com (the NHL's own API) does not send CORS headers, so a
-// direct browser fetch to it is blocked outright - confirmed directly from
-// the console on the deployed page. Routing it through free public CORS
-// proxies was tried next, but every one of them proved unreliable in
-// practice: corsproxy.io now requires registration and returns a flat 401
-// for anonymous use, and api.allorigins.win intermittently throws its own
-// CORS errors and 500/520 server errors - a third-party outage/instability
-// that can't be fixed by tuning timeouts or retry counts on this end.
-//
-// So this goes back to scraping DailyFantasyFuel's public starting-goalies
-// page, same as originally, through the same proxy fallback chain used
-// elsewhere in this file for the SiriusXM schedule scrape (r.jina.ai first,
-// since it actually renders the page rather than just re-fetching raw
-// HTML, then the allorigins variants as a fallback). This is still exposed
-// to the same free-proxy fragility described above, but there is no
-// alternative available to a static, server-less page: no combination of
-// official API + CORS proxy has proven reliable, so a well-instrumented
-// scrape (with clear [NHL Goalie] console logging at every step) is the
-// most practical option left.
 function normalizeGoalieTeamToken(value){
     return String(value || '')
         .normalize('NFKD')
@@ -1064,7 +1020,7 @@ function normalizeGoalieTeamToken(value){
 
 function normalizeGoalieStatus(value){
     const cleaned = String(value || '')
-        .replace(/[\u2713\u2714]/g, '')
+        .replace(/[✓✔]/g, '')
         .trim()
         .toUpperCase();
 
@@ -1176,16 +1132,8 @@ async function fetchNHLGoalies(forceRefresh = false, leagueKey = currentLeague){
     }
 
     try {
-        const text = await fetchTextWithFallback('https://www.dailyfantasyfuel.com/nhl/starting-goalies/', 'NHL Goalie');
-        if(!text){
-            console.log('[NHL Goalie] all proxy attempts failed or returned unusable content fetching the DailyFantasyFuel starting-goalies page - keeping any previously cached goalie data');
-            return;
-        }
-        const parsed = parseDailyFantasyFuelGoalies(text);
-        if(!Object.keys(parsed).length){
-            console.log(`[NHL Goalie] fetched ${text.length} chars from DailyFantasyFuel but parsed 0 matchups - the page's layout may have changed`);
-        }
-        nhlGoalieCache = parsed;
+        const text = await fetchTextWithFallback('https://www.dailyfantasyfuel.com/nhl/starting-goalies/');
+        nhlGoalieCache = parseDailyFantasyFuelGoalies(text);
         nhlGoalieCacheTime = Date.now();
     } catch (err) {
         console.error('NHL goalie fetch failed:', err);
@@ -1194,7 +1142,6 @@ async function fetchNHLGoalies(forceRefresh = false, leagueKey = currentLeague){
         }
     }
 }
-
 
 function formatGoalie(goalie, omitStatus){
     if(!goalie || !goalie.name) return 'TBD';
