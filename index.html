@@ -889,11 +889,14 @@ function buildTextProxyUrls(url){
     ];
 }
 
-async function fetchTextWithFallback(url){
+async function fetchTextWithFallback(url, label = 'fetchTextWithFallback'){
     for(const candidate of buildTextProxyUrls(url)){
         try {
             const res = await fetchWithTimeout(candidate, candidate.includes('r.jina.ai') ? 8000 : 5000);
-            if(!res.ok) continue;
+            if(!res.ok){
+                console.log(`[${label}] proxy attempt responded ${res.status} for ${url} via ${candidate.split('?')[0]}`);
+                continue;
+            }
             if(candidate.includes('/get?url=')){
                 const data = await res.json();
                 if(data?.contents) return data.contents;
@@ -901,66 +904,12 @@ async function fetchTextWithFallback(url){
                 const body = await res.text();
                 if(body) return body;
             }
-        } catch (err) {}
-    }
-    return "";
-}
-
-// api-web.nhle.com does not send Access-Control-Allow-Origin, so a plain
-// browser fetch() to it is blocked outright (net::ERR_FAILED, even though
-// the request itself succeeds server-side) - confirmed directly from the
-// console on the deployed page, not assumed. Every NHL API call this file
-// makes therefore has to go through a CORS proxy, the same way the
-// SiriusXM scraping already does.
-//
-// corsproxy.io now requires registration/an API key for anonymous use and
-// returns a flat 401 for every request - also confirmed from the console,
-// not assumed - so it's dropped entirely rather than left in as dead
-// weight. allorigins.win works, but it's a shared free service: a 7s
-// timeout was too tight once dozens of games' worth of boxscore/landing
-// calls were firing at once, and most of the failures logged were our own
-// timeout aborting the request, not allorigins actually rejecting it. A
-// longer timeout plus one retry (allorigins can be flaky moment-to-moment
-// even when it's basically working) fixes that. r.jina.ai is skipped here
-// since it renders pages as text/markdown, which can mangle raw JSON.
-function buildJsonProxyUrls(url){
-    return [
-        `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-        `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
-        `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-        `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
-        url
-    ];
-}
-
-async function fetchJsonWithFallback(url){
-    for(const candidate of buildJsonProxyUrls(url)){
-        try {
-            const res = await fetchWithTimeout(candidate, 15000);
-            if(!res.ok){
-                console.log(`[NHL Goalie] proxy attempt responded ${res.status} for ${url} via ${candidate.split('?')[0]}`);
-                continue;
-            }
-            if(candidate.includes('/get?url=')){
-                const wrapper = await res.json();
-                if(wrapper?.contents){
-                    try {
-                        return JSON.parse(wrapper.contents);
-                    } catch (parseErr) {
-                        console.log(`[NHL Goalie] allorigins /get returned non-JSON contents for ${url}`);
-                        continue;
-                    }
-                }
-                continue;
-            }
-            const data = await res.json();
-            if(data) return data;
         } catch (err) {
-            console.log(`[NHL Goalie] proxy attempt failed for ${url} via ${candidate.split('?')[0]}:`, err?.message || err);
+            console.log(`[${label}] proxy attempt failed for ${url} via ${candidate.split('?')[0]}:`, err?.message || err);
         }
     }
-    console.log(`[NHL Goalie] all proxy attempts failed for ${url}`);
-    return null;
+    console.log(`[${label}] all proxy attempts failed for ${url}`);
+    return "";
 }
 
 
@@ -1066,36 +1015,26 @@ async function fetchLeagueRecentForm(){
 }
 
 
-// --- NHL goalie data - from the NHL's own public API, via a CORS proxy --
-// This used to scrape a third-party "starting goalies" page through a chain
-// of CORS proxies (r.jina.ai, corsproxy.io, allorigins). That reintroduced
-// a different problem: the source was a scraped webpage, not real data, so
-// it was just as easy to break.
+// --- NHL goalie data - scraped from DailyFantasyFuel, via CORS proxies --
+// api-web.nhle.com (the NHL's own API) does not send CORS headers, so a
+// direct browser fetch to it is blocked outright - confirmed directly from
+// the console on the deployed page. Routing it through free public CORS
+// proxies was tried next, but every one of them proved unreliable in
+// practice: corsproxy.io now requires registration and returns a flat 401
+// for anonymous use, and api.allorigins.win intermittently throws its own
+// CORS errors and 500/520 server errors - a third-party outage/instability
+// that can't be fixed by tuning timeouts or retry counts on this end.
 //
-// api-web.nhle.com is the NHL's own public API - the same one nhl.com's
-// website itself calls - and returns real structured data, but (confirmed
-// directly from a live browser console, not assumed) it does NOT send an
-// Access-Control-Allow-Origin header. That means a plain client-side
-// fetch() to it from a page hosted elsewhere (like this one on GitHub
-// Pages) gets silently blocked by the browser as net::ERR_FAILED, even
-// though the request succeeds on the NHL's end (the console shows "200
-// (OK)" right next to the "failed" line - that combination is the
-// telltale sign of a missing CORS header, not a real network problem).
-// So every call to it here goes through the same CORS-proxy fallback
-// chain (allorigins, corsproxy.io) already used elsewhere in this file -
-// the data itself is now the NHL's official numbers, just relayed through
-// a proxy the same way the SiriusXM scraping already had to be.
-//
-// Approach:
-//   1. Pull today's (and yesterday's/tomorrow's, to match how the rest of
-//      the page windows dates) NHL schedule to get each game's id and the
-//      two teams' abbreviations.
-//   2. For each game, hit its "landing" endpoint. Before puck drop this
-//      contains each team's projected/likely starter (when the NHL has
-//      published one); once the game is underway or final, we instead pull
-//      real, live save/goals-against/save% stats from that game's boxscore.
-//   3. Cache the whole thing (all of today's games at once) for a few
-//      minutes so re-renders don't refetch every game individually.
+// So this goes back to scraping DailyFantasyFuel's public starting-goalies
+// page, same as originally, through the same proxy fallback chain used
+// elsewhere in this file for the SiriusXM schedule scrape (r.jina.ai first,
+// since it actually renders the page rather than just re-fetching raw
+// HTML, then the allorigins variants as a fallback). This is still exposed
+// to the same free-proxy fragility described above, but there is no
+// alternative available to a static, server-less page: no combination of
+// official API + CORS proxy has proven reliable, so a well-instrumented
+// scrape (with clear [NHL Goalie] console logging at every step) is the
+// most practical option left.
 function normalizeGoalieTeamToken(value){
     return String(value || '')
         .normalize('NFKD')
@@ -1105,238 +1044,105 @@ function normalizeGoalieTeamToken(value){
         .replace(/[^a-z0-9]/g, '');
 }
 
-// The rest of the page keys everything off ESPN's team abbreviation (e.g.
-// "TOR"). The NHL API's own team abbreviations match ESPN's for every
-// current NHL team, so we key the goalie cache directly off abbreviation -
-// no separate name-mapping table required.
-function nhlnowDateISO(offsetDays = 0){
-    const d = new Date();
-    d.setDate(d.getDate() + offsetDays);
-    const yyyy = d.getFullYear();
-    const mm = String(d.getMonth() + 1).padStart(2, '0');
-    const dd = String(d.getDate()).padStart(2, '0');
-    return `${yyyy}-${mm}-${dd}`;
+function normalizeGoalieStatus(value){
+    const cleaned = String(value || '')
+        .replace(/[\u2713\u2714]/g, '')
+        .trim()
+        .toUpperCase();
+
+    if(cleaned === 'CONFIRMED') return 'Confirmed';
+    if(cleaned === 'UNCONFIRMED') return 'Unconfirmed';
+    if(cleaned === 'EXPECTED') return 'Expected';
+    if(cleaned === 'PROJECTED') return 'Projected';
+    if(cleaned === 'LIKELY') return 'Likely';
+    return cleaned ? cleaned[0] + cleaned.slice(1).toLowerCase() : '';
 }
 
-// Confirmed against the NHL API's actual GoalieStats shape: saves and shots
-// against for a game are reported together as one string like "27/29" via
-// saveShotsAgainst, not as separate saves/shots fields, and savePctg is a
-// single 0-1 decimal (e.g. 0.931). There is no game-log win/loss record or
-// GAA on a boxscore goalie line at all (GAA is a season-long stat computed
-// elsewhere) - so we build our display "record" from the game's decision
-// (win/loss/OT loss) instead of a manufactured record, and show a shots
-// line rather than a fabricated GAA.
-function formatSvPct(value){
-    if(value == null || Number.isNaN(Number(value))) return '';
-    return Number(value).toFixed(3).replace(/^0\./, '.');
-}
+function extractGoalieName(line){
+    const raw = String(line || '').trim();
+    if(!raw) return '';
 
-function formatDecision(decision){
-    const d = String(decision || '').toUpperCase();
-    if(d === 'W') return 'W';
-    if(d === 'L') return 'L';
-    if(d === 'O' || d === 'OT') return 'OTL';
-    return '';
-}
-
-// Turns one of the NHL API's player objects (from landing.matchup.goalieComparison
-// or from a boxscore playerByGameStats goalie entry) into the simple shape
-// the rest of this file's goalie UI code expects: { name, status, record, gaa, svPct }.
-// "record" and "gaa" are repurposed here as this-game's decision and
-// saves/shots line respectively, since a boxscore goalie entry doesn't carry
-// a season GAA or win-loss record - see comment above.
-function normalizeNhlGoalieEntry(raw, status){
-    if(!raw) return null;
-
-    const firstName = raw.firstName?.default || raw.firstName || '';
-    const lastName = raw.lastName?.default || raw.lastName || '';
-    const name = raw.name?.default || `${firstName} ${lastName}`.trim();
-    if(!name) return null;
-
-    return {
-        name,
-        status: status || '',
-        record: formatDecision(raw.decision),
-        gaa: raw.saveShotsAgainst || '',
-        svPct: formatSvPct(raw.savePctg)
-    };
-}
-
-// api-web.nhle.com is undocumented and has changed the exact container key
-// for per-player boxscore stats more than once (playerByGameStats vs
-// boxscore vs other nestings, awayTeam vs away, etc). Rather than bet on
-// one specific path and silently show nothing the moment the NHL renames
-// something, we walk the ENTIRE response looking for objects that are
-// clearly goalie stat lines - regardless of where they're nested - and use
-// which side of the boxscore tree they were found under to sort them into
-// away/home. This keeps working even if the NHL reshuffles container names,
-// and if the shape changes so much nothing matches, it logs a small dump of
-// what it did see so the real shape is easy to spot in the console.
-function looksLikeGoalieEntry(node){
-    if(!node || typeof node !== 'object' || Array.isArray(node)) return false;
-    const hasName = !!(node.name?.default || node.firstName || node.lastName);
-    if(!hasName) return false;
-
-    const posRaw = node.position || node.positionCode || node.pos;
-    const pos = String(posRaw?.default ?? posRaw ?? '').toUpperCase();
-    if(pos === 'G' || pos === 'GOALIE' || pos === 'GOALTENDER') return true;
-
-    // Some shapes omit an explicit position on the stat line itself but the
-    // line does carry goalie-only stats (saves/shots-against/decision) -
-    // treat those as goalies too even without a position field.
-    const hasGoalieStat = ['saveShotsAgainst', 'savePctg', 'goalsAgainst', 'decision', 'shotsAgainst']
-        .some(key => node[key] !== undefined);
-    return hasGoalieStat;
-}
-
-// Recursively walks the boxscore JSON, collecting every goalie-shaped object
-// along with the path segments (object keys / array context) that led to
-// it, so we can tell which side of the tree ("away" vs "home") each one
-// came from without needing to know the exact container name in advance.
-function collectGoaliesWithSideHints(node, path, results, depth){
-    if(depth > 8 || !node || typeof node !== 'object') return;
-
-    if(looksLikeGoalieEntry(node)){
-        results.push({ entry: node, path: path.join('>') });
-        return; // a goalie entry's own children aren't worth descending into
+    const stripped = raw.replace(/\s+\d{1,2}-\d{1,2}-\d{1,2}.*$/,'').trim();
+    if(/^[A-Z][A-Za-z.\-']+(?:\s+[A-Z][A-Za-z.\-']+){1,3}$/.test(stripped)){
+        return stripped;
     }
 
-    if(Array.isArray(node)){
-        node.forEach((item, i) => collectGoaliesWithSideHints(item, path, results, depth + 1));
-        return;
-    }
-
-    Object.keys(node).forEach(key => {
-        collectGoaliesWithSideHints(node[key], [...path, key], results, depth + 1);
-    });
+    const match = raw.match(/([A-Z][A-Za-z.\-']+(?:\s+[A-Z][A-Za-z.\-']+){1,3})/);
+    return match ? match[1].trim() : '';
 }
 
-function sideFromPath(path, awayAbbr, homeAbbr){
-    const lower = path.toLowerCase();
-    // The path itself usually contains "awayTeam"/"homeTeam" or "away"/"home"
-    // as an object key somewhere on the way down to the goalie entry.
-    if(lower.includes('away')) return 'away';
-    if(lower.includes('home')) return 'home';
-    return null;
-}
+function parseDailyFantasyFuelGoalies(text){
+    const normalized = String(text || '')
+        .replace(/\r/g, '\n')
+        .replace(/\u00a0/g, ' ')
+        .replace(/[ \t]+/g, ' ')
+        .replace(/\n{3,}/g, '\n\n');
 
-function extractBoxscoreGoaliesBothSides(boxscore){
-    const awayAbbr = boxscore?.awayTeam?.abbrev;
-    const homeAbbr = boxscore?.homeTeam?.abbrev;
+    const lines = normalized.split('\n').map(line => line.trim()).filter(Boolean);
+    const data = {};
 
-    const found = [];
-    collectGoaliesWithSideHints(boxscore, [], found, 0);
+    for(let i = 0; i < lines.length; i++){
+        const line = lines[i];
 
-    if(!found.length){
-        console.log(`[NHL Goalie] deep search found no goalie-shaped entries anywhere in the boxscore for game ${boxscore?.id}. Top-level keys:`, Object.keys(boxscore || {}));
-        return { away: null, home: null };
-    }
+        const matchupMatch = line.match(/^[A-Za-z]{3},.*?([A-Za-z .'\-]+)\s+vs\s+([A-Za-z .'\-]+)$/i);
+        if(!matchupMatch) continue;
 
-    const bySide = { away: [], home: [] };
-    found.forEach(({ entry, path }) => {
-        const side = sideFromPath(path, awayAbbr, homeAbbr);
-        if(side) bySide[side].push(entry);
-    });
+        const homeTeam = matchupMatch[1].trim();
+        const awayTeam = matchupMatch[2].trim();
+        const key = `${normalizeGoalieTeamToken(awayTeam)}@${normalizeGoalieTeamToken(homeTeam)}`;
 
-    if(!bySide.away.length && !bySide.home.length){
-        console.log(`[NHL Goalie] found ${found.length} goalie-shaped entries for game ${boxscore?.id} but couldn't tell which side they belong to. Paths:`, found.map(f => f.path));
-        return { away: null, home: null };
-    }
+        const goalies = [];
+        let j = i + 1;
 
-    // Prefer whichever goalie on each side has logged ice time (the actual
-    // starter/current netminder); fall back to the first one found.
-    const pick = (list) => {
-        if(!list.length) return null;
-        const withIce = list.find(g => g?.toi && g.toi !== '00:00');
-        return normalizeNhlGoalieEntry(withIce || list[0], 'Confirmed');
-    };
+        while(j < lines.length && goalies.length < 2){
+            const current = lines[j];
 
-    return { away: pick(bySide.away), home: pick(bySide.home) };
-}
-
-// Same idea for the pregame "landing" endpoint's projected-starter data -
-// the exact path under matchup has moved around (goalieComparison vs
-// goalieStats, leaders vs a flat array, awayTeam vs away), so try the
-// plausible variants first, then fall back to the same side-tagged deep
-// search used for the boxscore.
-function findLandingGoalieRaw(landing, side){
-    const sideKeys = side === 'away' ? ['awayTeam', 'away'] : ['homeTeam', 'home'];
-    const comparisonContainers = [
-        landing?.matchup?.goalieComparison,
-        landing?.matchup?.goalieStats,
-        landing?.matchup?.skaterComparison?.goalies
-    ].filter(Boolean);
-
-    for(const container of comparisonContainers){
-        for(const sideKey of sideKeys){
-            const entry = container?.[sideKey];
-            const candidate = entry?.leaders?.[0] || (Array.isArray(entry) ? entry[0] : null);
-            if(candidate) return candidate;
-        }
-    }
-    return null;
-}
-
-async function fetchOneGameGoalies(gameId, gameState){
-    const isLiveOrFinal = ['LIVE', 'CRIT', 'FINAL', 'OFF'].includes(String(gameState || '').toUpperCase());
-
-    try {
-        if(isLiveOrFinal){
-            const boxscore = await fetchJsonWithFallback(`https://api-web.nhle.com/v1/gamecenter/${gameId}/boxscore`);
-            if(!boxscore){
-                console.log(`[NHL Goalie] boxscore fetch failed for game ${gameId}`);
-                return null;
+            if(/^[A-Za-z]{3},.*?\svs\s/i.test(current) || /^[A-Z][A-Z .'\-]+ VS [A-Z][A-Z .'\-]+$/.test(current)){
+                if(goalies.length) break;
+                j++;
+                continue;
             }
-            return extractBoxscoreGoaliesBothSides(boxscore);
+
+            const status = normalizeGoalieStatus(current);
+            if(['Confirmed', 'Unconfirmed', 'Expected', 'Projected', 'Likely'].includes(status)){
+                let name = '';
+                for(let k = j - 1; k >= Math.max(i + 1, j - 4); k--){
+                    name = extractGoalieName(lines[k]);
+                    if(name) break;
+                }
+
+                let record = '';
+                let gaa = '';
+                let svPct = '';
+
+                for(let k = j + 1; k < Math.min(j + 14, lines.length); k++){
+                    const probe = lines[k];
+                    if(/^RECORD$/i.test(probe) && k > j + 0) record = lines[k - 1];
+                    if(/^GAA$/i.test(probe) && k > j + 0) gaa = lines[k - 1];
+                    if(/^SV PCT$/i.test(probe) && k > j + 0) svPct = lines[k - 1];
+
+                    if(record && gaa && svPct) break;
+                }
+
+                if(name){
+                    goalies.push({ name, status, record, gaa, svPct });
+                }
+            }
+
+            j++;
         }
 
-        // Pregame: the "landing" endpoint carries each team's projected
-        // starter once the NHL has published one (usually a few hours
-        // before puck drop). Before that's published, these will just come
-        // back null and the UI shows TBD - there's no third-party source to
-        // backfill it from that wouldn't reintroduce the scraping fragility
-        // we're trying to avoid.
-        const landing = await fetchJsonWithFallback(`https://api-web.nhle.com/v1/gamecenter/${gameId}/landing`);
-        if(!landing){
-            console.log(`[NHL Goalie] landing fetch failed for game ${gameId}`);
-            return null;
+        if(goalies.length){
+            data[key] = {
+                away: goalies[1] || null,
+                home: goalies[0] || null
+            };
         }
 
-        const awayRaw = findLandingGoalieRaw(landing, 'away');
-        const homeRaw = findLandingGoalieRaw(landing, 'home');
-        if(!awayRaw && !homeRaw){
-            console.log(`[NHL Goalie] no projected starters found yet in landing for game ${gameId} (matchup keys:`, Object.keys(landing?.matchup || {}), ') - normal if this is well before puck drop.');
-        }
-
-        return {
-            away: normalizeNhlGoalieEntry(awayRaw, awayRaw ? 'Projected' : ''),
-            home: normalizeNhlGoalieEntry(homeRaw, homeRaw ? 'Projected' : '')
-        };
-    } catch (err) {
-        console.error(`NHL goalie fetch failed for game ${gameId}:`, err);
-        return null;
-    }
-}
-
-// Running every game's boxscore/landing fetch through Promise.all at once
-// means dozens of simultaneous requests all hitting the same free, shared
-// allorigins proxy - which is very likely why so many of them were timing
-// out under load. Running them a few at a time instead is slower overall
-// but far more reliable against a rate-limited/shared service.
-async function mapWithConcurrencyLimit(items, limit, worker){
-    const results = new Array(items.length);
-    let nextIndex = 0;
-
-    async function runNext(){
-        while(nextIndex < items.length){
-            const i = nextIndex++;
-            results[i] = await worker(items[i], i);
-        }
+        i = Math.max(i, j - 1);
     }
 
-    const runners = Array.from({ length: Math.min(limit, items.length) }, runNext);
-    await Promise.all(runners);
-    return results;
+    return data;
 }
 
 async function fetchNHLGoalies(forceRefresh = false, leagueKey = currentLeague){
@@ -1352,47 +1158,15 @@ async function fetchNHLGoalies(forceRefresh = false, leagueKey = currentLeague){
     }
 
     try {
-        // Match the "yesterday / today / tomorrow" window the rest of the
-        // NHL tab uses, so goalies are available regardless of which of
-        // those a person is looking at.
-        const dates = [nhlnowDateISO(-1), nhlnowDateISO(0), nhlnowDateISO(1)];
-        const scheduleResponses = await mapWithConcurrencyLimit(dates, 3, date =>
-            fetchJsonWithFallback(`https://api-web.nhle.com/v1/schedule/${date}`)
-        );
-
-        const games = [];
-        const seenIds = new Set();
-        scheduleResponses.forEach(data => {
-            (data?.gameWeek || []).forEach(day => {
-                (day?.games || []).forEach(game => {
-                    if(game?.id && !seenIds.has(game.id)){
-                        seenIds.add(game.id);
-                        games.push(game);
-                    }
-                });
-            });
-        });
-
-        const results = await mapWithConcurrencyLimit(games, 4, async game => {
-            const awayAbbr = game?.awayTeam?.abbrev;
-            const homeAbbr = game?.homeTeam?.abbrev;
-            if(!awayAbbr || !homeAbbr) return null;
-
-            const goalies = await fetchOneGameGoalies(game.id, game.gameState);
-            if(!goalies) return null;
-
-            return {
-                key: `${normalizeGoalieTeamToken(awayAbbr)}@${normalizeGoalieTeamToken(homeAbbr)}`,
-                goalies
-            };
-        });
-
-        const newCache = {};
-        results.forEach(entry => {
-            if(entry) newCache[entry.key] = entry.goalies;
-        });
-
-        nhlGoalieCache = newCache;
+        const text = await fetchTextWithFallback('https://www.dailyfantasyfuel.com/nhl/starting-goalies/', 'NHL Goalie');
+        if(!text){
+            console.log('[NHL Goalie] all proxy attempts failed fetching the DailyFantasyFuel starting-goalies page');
+        }
+        const parsed = parseDailyFantasyFuelGoalies(text);
+        if(!Object.keys(parsed).length){
+            console.log(`[NHL Goalie] fetched ${text.length} chars from DailyFantasyFuel but parsed 0 matchups - the page's layout may have changed`);
+        }
+        nhlGoalieCache = parsed;
         nhlGoalieCacheTime = Date.now();
     } catch (err) {
         console.error('NHL goalie fetch failed:', err);
@@ -1402,12 +1176,13 @@ async function fetchNHLGoalies(forceRefresh = false, leagueKey = currentLeague){
     }
 }
 
+
 function formatGoalie(goalie, omitStatus){
     if(!goalie || !goalie.name) return 'TBD';
 
     const parts = [];
     if(goalie.record) parts.push(goalie.record);
-    if(goalie.gaa) parts.push(`${goalie.gaa} SA`);
+    if(goalie.gaa) parts.push(`${goalie.gaa} GAA`);
     if(goalie.svPct) parts.push(`${goalie.svPct} SV%`);
 
     const statText = parts.length ? ` (${parts.join(', ')})` : '';
@@ -1419,16 +1194,27 @@ function formatGoalie(goalie, omitStatus){
 function goalieStrengthScore(goalie){
     if(!goalie || !goalie.name) return null;
 
-    // A boxscore goalie line has no season GAA to compare with - the only
-    // real quality signal available here is this game's save percentage.
+    const gaa = parseFloat(String(goalie.gaa || '').replace(/[^\d.]/g, ''));
     const svPctRaw = String(goalie.svPct || '').trim();
     let svPct = parseFloat(svPctRaw.replace(/[^\d.]/g, ''));
     if(!Number.isNaN(svPct) && svPct > 1.5){
         svPct = svPct / 1000;
     }
 
-    if(Number.isNaN(svPct)) return null;
-    return Math.max(0, (svPct - 0.850)) * 1000;
+    let score = 0;
+    let parts = 0;
+
+    if(!Number.isNaN(gaa)){
+        score += Math.max(0, 5 - gaa) * 25;
+        parts += 1;
+    }
+
+    if(!Number.isNaN(svPct)){
+        score += Math.max(0, (svPct - 0.850)) * 1000;
+        parts += 1;
+    }
+
+    return parts ? score : null;
 }
 
 function getGoalieAdvantage(goalieA, goalieB){
@@ -1459,7 +1245,7 @@ function enhanceNHLGoaliesUI(gameDiv, awayTeam, homeTeam){
     const homeEl = gameDiv.querySelector('.goalie-home');
     if(!awayEl || !homeEl) return;
 
-    const key = `${normalizeGoalieTeamToken(awayTeam?.team?.abbreviation)}@${normalizeGoalieTeamToken(homeTeam?.team?.abbreviation)}`;
+    const key = `${normalizeGoalieTeamToken(awayTeam?.team?.displayName)}@${normalizeGoalieTeamToken(homeTeam?.team?.displayName)}`;
     const goalieData = nhlGoalieCache[key] || null;
 
     const advantage = getGoalieAdvantage(goalieData?.away || null, goalieData?.home || null);
