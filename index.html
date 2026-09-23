@@ -882,28 +882,46 @@ function buildTextProxyUrls(url){
     const u = new URL(url);
     const noScheme = `${u.host}${u.pathname}${u.search}`;
     return [
-        url,
         `https://r.jina.ai/http://${noScheme}`,
         `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-        `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`
+        `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
+        url
     ];
 }
+
+// A "successful" response isn't necessarily a useful one: r.jina.ai in
+// particular can return a real 200 with a tiny stub (a bot-check page, a
+// consent wall, an error message) instead of the site's actual content.
+// Without a minimum-length check, that stub gets accepted as if it were
+// the real page, short-circuits the rest of the fallback chain, and every
+// later parse silently finds 0 matches - which is exactly what was
+// happening here (the same fixed ~5000-char non-page came back on every
+// single attempt). The SiriusXM scraper already guards against this with
+// a length check; this applies the same guard here.
+const MIN_USEFUL_BODY_LENGTH = 2000;
 
 async function fetchTextWithFallback(url, label = 'fetchTextWithFallback'){
     for(const candidate of buildTextProxyUrls(url)){
         try {
-            const res = await fetchWithTimeout(candidate, candidate.includes('r.jina.ai') ? 8000 : 5000);
+            const res = await fetchWithTimeout(candidate, candidate.includes('r.jina.ai') ? 10000 : 6000);
             if(!res.ok){
                 console.log(`[${label}] proxy attempt responded ${res.status} for ${url} via ${candidate.split('?')[0]}`);
                 continue;
             }
+
+            let body = '';
             if(candidate.includes('/get?url=')){
                 const data = await res.json();
-                if(data?.contents) return data.contents;
+                body = data?.contents || '';
             } else {
-                const body = await res.text();
-                if(body) return body;
+                body = await res.text();
             }
+
+            if(body && body.length >= MIN_USEFUL_BODY_LENGTH){
+                console.log(`[${label}] ${candidate.split('?')[0]} returned ${body.length} chars for ${url}`);
+                return body;
+            }
+            console.log(`[${label}] ${candidate.split('?')[0]} returned too little content (${body.length} chars) for ${url} - trying next proxy`);
         } catch (err) {
             console.log(`[${label}] proxy attempt failed for ${url} via ${candidate.split('?')[0]}:`, err?.message || err);
         }
@@ -1160,7 +1178,8 @@ async function fetchNHLGoalies(forceRefresh = false, leagueKey = currentLeague){
     try {
         const text = await fetchTextWithFallback('https://www.dailyfantasyfuel.com/nhl/starting-goalies/', 'NHL Goalie');
         if(!text){
-            console.log('[NHL Goalie] all proxy attempts failed fetching the DailyFantasyFuel starting-goalies page');
+            console.log('[NHL Goalie] all proxy attempts failed or returned unusable content fetching the DailyFantasyFuel starting-goalies page - keeping any previously cached goalie data');
+            return;
         }
         const parsed = parseDailyFantasyFuelGoalies(text);
         if(!Object.keys(parsed).length){
