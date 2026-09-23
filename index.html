@@ -911,15 +911,24 @@ async function fetchTextWithFallback(url){
 // the request itself succeeds server-side) - confirmed directly from the
 // console on the deployed page, not assumed. Every NHL API call this file
 // makes therefore has to go through a CORS proxy, the same way the
-// SiriusXM scraping already does. r.jina.ai renders pages as text/markdown
-// (fine for scraping HTML, but it can mangle raw JSON), so for JSON
-// endpoints we skip it and go straight to allorigins's two modes, then a
-// direct attempt last (in case CORS policy ever changes).
+// SiriusXM scraping already does.
+//
+// corsproxy.io now requires registration/an API key for anonymous use and
+// returns a flat 401 for every request - also confirmed from the console,
+// not assumed - so it's dropped entirely rather than left in as dead
+// weight. allorigins.win works, but it's a shared free service: a 7s
+// timeout was too tight once dozens of games' worth of boxscore/landing
+// calls were firing at once, and most of the failures logged were our own
+// timeout aborting the request, not allorigins actually rejecting it. A
+// longer timeout plus one retry (allorigins can be flaky moment-to-moment
+// even when it's basically working) fixes that. r.jina.ai is skipped here
+// since it renders pages as text/markdown, which can mangle raw JSON.
 function buildJsonProxyUrls(url){
     return [
         `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
         `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
-        `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
+        `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+        `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
         url
     ];
 }
@@ -927,7 +936,7 @@ function buildJsonProxyUrls(url){
 async function fetchJsonWithFallback(url){
     for(const candidate of buildJsonProxyUrls(url)){
         try {
-            const res = await fetchWithTimeout(candidate, 7000);
+            const res = await fetchWithTimeout(candidate, 15000);
             if(!res.ok){
                 console.log(`[NHL Goalie] proxy attempt responded ${res.status} for ${url} via ${candidate.split('?')[0]}`);
                 continue;
@@ -1309,6 +1318,27 @@ async function fetchOneGameGoalies(gameId, gameState){
     }
 }
 
+// Running every game's boxscore/landing fetch through Promise.all at once
+// means dozens of simultaneous requests all hitting the same free, shared
+// allorigins proxy - which is very likely why so many of them were timing
+// out under load. Running them a few at a time instead is slower overall
+// but far more reliable against a rate-limited/shared service.
+async function mapWithConcurrencyLimit(items, limit, worker){
+    const results = new Array(items.length);
+    let nextIndex = 0;
+
+    async function runNext(){
+        while(nextIndex < items.length){
+            const i = nextIndex++;
+            results[i] = await worker(items[i], i);
+        }
+    }
+
+    const runners = Array.from({ length: Math.min(limit, items.length) }, runNext);
+    await Promise.all(runners);
+    return results;
+}
+
 async function fetchNHLGoalies(forceRefresh = false, leagueKey = currentLeague){
     if(leagueKey !== "NHL"){
         return;
@@ -1326,10 +1356,8 @@ async function fetchNHLGoalies(forceRefresh = false, leagueKey = currentLeague){
         // NHL tab uses, so goalies are available regardless of which of
         // those a person is looking at.
         const dates = [nhlnowDateISO(-1), nhlnowDateISO(0), nhlnowDateISO(1)];
-        const scheduleResponses = await Promise.all(
-            dates.map(date =>
-                fetchJsonWithFallback(`https://api-web.nhle.com/v1/schedule/${date}`)
-            )
+        const scheduleResponses = await mapWithConcurrencyLimit(dates, 3, date =>
+            fetchJsonWithFallback(`https://api-web.nhle.com/v1/schedule/${date}`)
         );
 
         const games = [];
@@ -1345,7 +1373,7 @@ async function fetchNHLGoalies(forceRefresh = false, leagueKey = currentLeague){
             });
         });
 
-        const results = await Promise.all(games.map(async game => {
+        const results = await mapWithConcurrencyLimit(games, 4, async game => {
             const awayAbbr = game?.awayTeam?.abbrev;
             const homeAbbr = game?.homeTeam?.abbrev;
             if(!awayAbbr || !homeAbbr) return null;
@@ -1357,7 +1385,7 @@ async function fetchNHLGoalies(forceRefresh = false, leagueKey = currentLeague){
                 key: `${normalizeGoalieTeamToken(awayAbbr)}@${normalizeGoalieTeamToken(homeAbbr)}`,
                 goalies
             };
-        }));
+        });
 
         const newCache = {};
         results.forEach(entry => {
