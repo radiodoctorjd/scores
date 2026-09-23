@@ -1009,6 +1009,27 @@ async function fetchLeagueRecentForm(){
 }
 
 
+// --- NHL goalie data - straight from the NHL's own public API -----------
+// This used to scrape a third-party "starting goalies" page through a chain
+// of CORS proxies (r.jina.ai, corsproxy.io, allorigins). That's exactly the
+// kind of thing that silently breaks: any one of those free proxies going
+// down, getting rate-limited, or getting blocked means goalies just vanish
+// from the page with no obvious cause.
+//
+// api-web.nhle.com is the NHL's own public API - the same one nhl.com's
+// website itself calls - and it sends CORS headers that allow browser
+// fetches directly, so no proxy is needed at all.
+//
+// Approach:
+//   1. Pull today's (and yesterday's/tomorrow's, to match how the rest of
+//      the page windows dates) NHL schedule to get each game's id and the
+//      two teams' abbreviations.
+//   2. For each game, hit its "landing" endpoint. Before puck drop this
+//      contains each team's projected/likely starter (when the NHL has
+//      published one); once the game is underway or final, we instead pull
+//      real, live save/goals-against/save% stats from that game's boxscore.
+//   3. Cache the whole thing (all of today's games at once) for a few
+//      minutes so re-renders don't refetch every game individually.
 function normalizeGoalieTeamToken(value){
     return String(value || '')
         .normalize('NFKD')
@@ -1018,105 +1039,110 @@ function normalizeGoalieTeamToken(value){
         .replace(/[^a-z0-9]/g, '');
 }
 
-function normalizeGoalieStatus(value){
-    const cleaned = String(value || '')
-        .replace(/[✓✔]/g, '')
-        .trim()
-        .toUpperCase();
-
-    if(cleaned === 'CONFIRMED') return 'Confirmed';
-    if(cleaned === 'UNCONFIRMED') return 'Unconfirmed';
-    if(cleaned === 'EXPECTED') return 'Expected';
-    if(cleaned === 'PROJECTED') return 'Projected';
-    if(cleaned === 'LIKELY') return 'Likely';
-    return cleaned ? cleaned[0] + cleaned.slice(1).toLowerCase() : '';
+// The rest of the page keys everything off ESPN's team abbreviation (e.g.
+// "TOR"). The NHL API's own team abbreviations match ESPN's for every
+// current NHL team, so we key the goalie cache directly off abbreviation -
+// no separate name-mapping table required.
+function nhlnowDateISO(offsetDays = 0){
+    const d = new Date();
+    d.setDate(d.getDate() + offsetDays);
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
 }
 
-function extractGoalieName(line){
-    const raw = String(line || '').trim();
-    if(!raw) return '';
-
-    const stripped = raw.replace(/\s+\d{1,2}-\d{1,2}-\d{1,2}.*$/,'').trim();
-    if(/^[A-Z][A-Za-z.\-']+(?:\s+[A-Z][A-Za-z.\-']+){1,3}$/.test(stripped)){
-        return stripped;
-    }
-
-    const match = raw.match(/([A-Z][A-Za-z.\-']+(?:\s+[A-Z][A-Za-z.\-']+){1,3})/);
-    return match ? match[1].trim() : '';
+function formatGoalieRecord(goalie){
+    if(!goalie) return '';
+    const w = goalie.wins;
+    const l = goalie.losses;
+    const otl = goalie.otLosses;
+    if(w == null && l == null) return '';
+    return `${w ?? 0}-${l ?? 0}${otl != null ? `-${otl}` : ''}`;
 }
 
-function parseDailyFantasyFuelGoalies(text){
-    const normalized = String(text || '')
-        .replace(/\r/g, '\n')
-        .replace(/\u00a0/g, ' ')
-        .replace(/[ \t]+/g, ' ')
-        .replace(/\n{3,}/g, '\n\n');
+// The NHL API reports save percentage as a 0-1 decimal (e.g. 0.912) and GAA
+// as a plain number (e.g. 2.47) - we just format them for display here.
+function formatGaa(value){
+    if(value == null || Number.isNaN(Number(value))) return '';
+    return Number(value).toFixed(2);
+}
 
-    const lines = normalized.split('\n').map(line => line.trim()).filter(Boolean);
-    const data = {};
+function formatSvPct(value){
+    if(value == null || Number.isNaN(Number(value))) return '';
+    return Number(value).toFixed(3).replace(/^0\./, '.');
+}
 
-    for(let i = 0; i < lines.length; i++){
-        const line = lines[i];
+// Turns one of the NHL API's player objects (from landing.matchup.goalieComparison
+// or from a boxscore playerByGameStats goalie entry) into the simple shape
+// the rest of this file's goalie UI code expects: { name, status, record, gaa, svPct }.
+function normalizeNhlGoalieEntry(raw, status){
+    if(!raw) return null;
 
-        const matchupMatch = line.match(/^[A-Za-z]{3},.*?([A-Za-z .'\-]+)\s+vs\s+([A-Za-z .'\-]+)$/i);
-        if(!matchupMatch) continue;
+    const firstName = raw.firstName?.default || raw.firstName || '';
+    const lastName = raw.lastName?.default || raw.lastName || '';
+    const name = raw.name?.default || `${firstName} ${lastName}`.trim();
+    if(!name) return null;
 
-        const homeTeam = matchupMatch[1].trim();
-        const awayTeam = matchupMatch[2].trim();
-        const key = `${normalizeGoalieTeamToken(awayTeam)}@${normalizeGoalieTeamToken(homeTeam)}`;
+    return {
+        name,
+        status: status || '',
+        record: formatGoalieRecord(raw),
+        gaa: formatGaa(raw.goalsAgainstAverage ?? raw.gaa),
+        svPct: formatSvPct(raw.savePercentage ?? raw.savePctg)
+    };
+}
 
-        const goalies = [];
-        let j = i + 1;
+// Pulls the confirmed, currently-in-net goalie (with live stats) out of a
+// boxscore's playerByGameStats for one side ("awayTeam" / "homeTeam").
+function extractBoxscoreStartingGoalie(boxscore, sideKey){
+    const goalies = boxscore?.playerByGameStats?.[sideKey]?.goalies;
+    if(!Array.isArray(goalies) || !goalies.length) return null;
 
-        while(j < lines.length && goalies.length < 2){
-            const current = lines[j];
+    // The goalie who's actually played (has logged ice time) is the one
+    // who started - if for some reason none show ice time yet (e.g. the
+    // game just started), fall back to the first goalie listed, which the
+    // NHL API lists starter-first.
+    const withIce = goalies.find(g => g?.toi && g.toi !== '00:00') || goalies[0];
+    return normalizeNhlGoalieEntry(withIce, 'Confirmed');
+}
 
-            if(/^[A-Za-z]{3},.*?\svs\s/i.test(current) || /^[A-Z][A-Z .'\-]+ VS [A-Z][A-Z .'\-]+$/.test(current)){
-                if(goalies.length) break;
-                j++;
-                continue;
-            }
+async function fetchOneGameGoalies(gameId, gameState){
+    const isLiveOrFinal = ['LIVE', 'CRIT', 'FINAL', 'OFF'].includes(String(gameState || '').toUpperCase());
 
-            const status = normalizeGoalieStatus(current);
-            if(['Confirmed', 'Unconfirmed', 'Expected', 'Projected', 'Likely'].includes(status)){
-                let name = '';
-                for(let k = j - 1; k >= Math.max(i + 1, j - 4); k--){
-                    name = extractGoalieName(lines[k]);
-                    if(name) break;
-                }
-
-                let record = '';
-                let gaa = '';
-                let svPct = '';
-
-                for(let k = j + 1; k < Math.min(j + 14, lines.length); k++){
-                    const probe = lines[k];
-                    if(/^RECORD$/i.test(probe) && k > j + 0) record = lines[k - 1];
-                    if(/^GAA$/i.test(probe) && k > j + 0) gaa = lines[k - 1];
-                    if(/^SV PCT$/i.test(probe) && k > j + 0) svPct = lines[k - 1];
-
-                    if(record && gaa && svPct) break;
-                }
-
-                if(name){
-                    goalies.push({ name, status, record, gaa, svPct });
-                }
-            }
-
-            j++;
-        }
-
-        if(goalies.length){
-            data[key] = {
-                away: goalies[1] || null,
-                home: goalies[0] || null
+    try {
+        if(isLiveOrFinal){
+            const res = await fetchWithTimeout(`https://api-web.nhle.com/v1/gamecenter/${gameId}/boxscore`, 6000);
+            if(!res.ok) return null;
+            const boxscore = await res.json();
+            return {
+                away: extractBoxscoreStartingGoalie(boxscore, 'awayTeam'),
+                home: extractBoxscoreStartingGoalie(boxscore, 'homeTeam')
             };
         }
 
-        i = Math.max(i, j - 1);
-    }
+        // Pregame: the "landing" endpoint carries each team's projected
+        // starter once the NHL has published one (usually a few hours
+        // before puck drop) under matchup.goalieComparison. Before that's
+        // published, these will just come back null and the UI shows TBD -
+        // there's no third-party source to backfill it from that wouldn't
+        // reintroduce the same scraping fragility we're trying to avoid.
+        const res = await fetchWithTimeout(`https://api-web.nhle.com/v1/gamecenter/${gameId}/landing`, 6000);
+        if(!res.ok) return null;
+        const landing = await res.json();
 
-    return data;
+        const comparison = landing?.matchup?.goalieComparison;
+        const awayRaw = comparison?.awayTeam?.leaders?.[0] || comparison?.awayTeam?.[0] || null;
+        const homeRaw = comparison?.homeTeam?.leaders?.[0] || comparison?.homeTeam?.[0] || null;
+
+        return {
+            away: normalizeNhlGoalieEntry(awayRaw, awayRaw ? 'Projected' : ''),
+            home: normalizeNhlGoalieEntry(homeRaw, homeRaw ? 'Projected' : '')
+        };
+    } catch (err) {
+        console.error(`NHL goalie fetch failed for game ${gameId}:`, err);
+        return null;
+    }
 }
 
 async function fetchNHLGoalies(forceRefresh = false, leagueKey = currentLeague){
@@ -1132,8 +1158,51 @@ async function fetchNHLGoalies(forceRefresh = false, leagueKey = currentLeague){
     }
 
     try {
-        const text = await fetchTextWithFallback('https://www.dailyfantasyfuel.com/nhl/starting-goalies/');
-        nhlGoalieCache = parseDailyFantasyFuelGoalies(text);
+        // Match the "yesterday / today / tomorrow" window the rest of the
+        // NHL tab uses, so goalies are available regardless of which of
+        // those a person is looking at.
+        const dates = [nhlnowDateISO(-1), nhlnowDateISO(0), nhlnowDateISO(1)];
+        const scheduleResponses = await Promise.all(
+            dates.map(date =>
+                fetchWithTimeout(`https://api-web.nhle.com/v1/schedule/${date}`, 6000)
+                    .then(res => res.ok ? res.json() : null)
+                    .catch(() => null)
+            )
+        );
+
+        const games = [];
+        const seenIds = new Set();
+        scheduleResponses.forEach(data => {
+            (data?.gameWeek || []).forEach(day => {
+                (day?.games || []).forEach(game => {
+                    if(game?.id && !seenIds.has(game.id)){
+                        seenIds.add(game.id);
+                        games.push(game);
+                    }
+                });
+            });
+        });
+
+        const results = await Promise.all(games.map(async game => {
+            const awayAbbr = game?.awayTeam?.abbrev;
+            const homeAbbr = game?.homeTeam?.abbrev;
+            if(!awayAbbr || !homeAbbr) return null;
+
+            const goalies = await fetchOneGameGoalies(game.id, game.gameState);
+            if(!goalies) return null;
+
+            return {
+                key: `${normalizeGoalieTeamToken(awayAbbr)}@${normalizeGoalieTeamToken(homeAbbr)}`,
+                goalies
+            };
+        }));
+
+        const newCache = {};
+        results.forEach(entry => {
+            if(entry) newCache[entry.key] = entry.goalies;
+        });
+
+        nhlGoalieCache = newCache;
         nhlGoalieCacheTime = Date.now();
     } catch (err) {
         console.error('NHL goalie fetch failed:', err);
@@ -1211,7 +1280,7 @@ function enhanceNHLGoaliesUI(gameDiv, awayTeam, homeTeam){
     const homeEl = gameDiv.querySelector('.goalie-home');
     if(!awayEl || !homeEl) return;
 
-    const key = `${normalizeGoalieTeamToken(awayTeam?.team?.displayName)}@${normalizeGoalieTeamToken(homeTeam?.team?.displayName)}`;
+    const key = `${normalizeGoalieTeamToken(awayTeam?.team?.abbreviation)}@${normalizeGoalieTeamToken(homeTeam?.team?.abbreviation)}`;
     const goalieData = nhlGoalieCache[key] || null;
 
     const advantage = getGoalieAdvantage(goalieData?.away || null, goalieData?.home || null);
