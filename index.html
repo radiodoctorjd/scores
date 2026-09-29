@@ -881,9 +881,12 @@ function fetchWithTimeout(url, timeoutMs = 5000){
 function buildTextProxyUrls(url){
     const u = new URL(url);
     const noScheme = `${u.host}${u.pathname}${u.search}`;
+    // The origin sites don't send CORS headers, so a direct fetch always fails
+    // from the browser; go straight to the proxies.
     return [
-        url,
         `https://r.jina.ai/http://${noScheme}`,
+        `https://corsproxy.io/?${encodeURIComponent(url)}`,
+        `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
         `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
         `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`
     ];
