@@ -885,7 +885,6 @@ function buildTextProxyUrls(url){
     // from the browser; go straight to the proxies.
     return [
         `https://r.jina.ai/http://${noScheme}`,
-        `https://corsproxy.io/?${encodeURIComponent(url)}`,
         `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
         `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
         `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`
@@ -1218,10 +1217,17 @@ function parseDailyFantasyFuelGoalies(text){
     return data;
 }
 
-async function fetchNHLGoalies(forceRefresh = false, leagueKey = currentLeague){
-    if(leagueKey !== "NHL"){
-        return;
+let nhlGoalieInFlight = null;
+
+function fetchNHLGoalies(forceRefresh = false, leagueKey = currentLeague){
+    if(leagueKey !== "NHL") return Promise.resolve();
+    if(!nhlGoalieInFlight){
+        nhlGoalieInFlight = fetchNHLGoaliesUncached(forceRefresh).finally(() => { nhlGoalieInFlight = null; });
     }
+    return nhlGoalieInFlight;
+}
+
+async function fetchNHLGoaliesUncached(forceRefresh){
 
     const now = Date.now();
     const cacheIsFresh = nhlGoalieCacheTime && (now - nhlGoalieCacheTime < 5 * 60 * 1000) && Object.keys(nhlGoalieCache || {}).length;
@@ -2448,7 +2454,10 @@ function updateScoreboardTable(gameDiv, away, home){
 
 function refreshVisibleNHLGoalies(){
     if(currentLeague !== "NHL") return;
+    refreshNHLGoalieLines();
+}
 
+function refreshNHLGoalieLines(){
     document.querySelectorAll('.game[data-event-id]').forEach(gameDiv => {
         const awayAbbr = gameDiv.dataset.awayAbbr;
         const homeAbbr = gameDiv.dataset.homeAbbr;
@@ -2625,11 +2634,10 @@ async function loadAllLiveGames(){
     const liveList = results.flat().sort((a, b) => new Date(a.event.date) - new Date(b.event.date));
 
     if(liveList.some(item => item.leagueKey === "NHL")){
-        try {
-            await fetchNHLGoalies(false, "NHL");
-        } catch (err) {
-            console.error('NHL goalie fetch failed during live aggregation:', err);
-        }
+        // Render now; goalie lines fill in when the (slow) fetch finishes.
+        fetchNHLGoalies(false, "NHL")
+            .then(refreshNHLGoalieLines)
+            .catch(err => console.error('NHL goalie fetch failed during live aggregation:', err));
     }
 
     if(!liveList.length){
