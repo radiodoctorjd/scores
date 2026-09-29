@@ -1134,6 +1134,9 @@ async function fetchNHLGoalies(forceRefresh = false, leagueKey = currentLeague){
     try {
         const text = await fetchTextWithFallback('https://www.dailyfantasyfuel.com/nhl/starting-goalies/');
         nhlGoalieCache = parseDailyFantasyFuelGoalies(text);
+        if(!Object.keys(nhlGoalieCache).length){
+            console.warn('NHL goalie parse found no matchups (fetched ' + String(text || '').length + ' chars)');
+        }
         nhlGoalieCacheTime = Date.now();
     } catch (err) {
         console.error('NHL goalie fetch failed:', err);
@@ -1206,13 +1209,36 @@ function buildGoalieLineHTML(teamAbbr, goalie, isAdvantage){
     `;
 }
 
+function findGoalieData(awayTeam, homeTeam){
+    const tok = normalizeGoalieTeamToken;
+    const exact = nhlGoalieCache[`${tok(awayTeam?.displayName)}@${tok(homeTeam?.displayName)}`];
+    if(exact) return exact;
+
+    // Source may use a different city/team name (e.g. "St Louis" vs "St. Louis",
+    // "Utah Hockey Club" vs "Utah Mammoth"), so fall back to matching on the
+    // nickname (last word) or the team's short/location names.
+    const matches = (srcToken, team) => {
+        if(!srcToken || !team) return false;
+        const candidates = [team.displayName, team.shortDisplayName, team.name, team.location, team.abbreviation]
+            .map(tok).filter(Boolean);
+        const nickname = tok(String(team.displayName || '').trim().split(/\s+/).pop());
+        return candidates.some(c => c === srcToken || (c.length > 3 && (srcToken.includes(c) || c.includes(srcToken))))
+            || (nickname && srcToken.endsWith(nickname));
+    };
+
+    for(const key of Object.keys(nhlGoalieCache)){
+        const [srcAway, srcHome] = key.split('@');
+        if(matches(srcAway, awayTeam) && matches(srcHome, homeTeam)) return nhlGoalieCache[key];
+    }
+    return null;
+}
+
 function enhanceNHLGoaliesUI(gameDiv, awayTeam, homeTeam){
     const awayEl = gameDiv.querySelector('.goalie-away');
     const homeEl = gameDiv.querySelector('.goalie-home');
     if(!awayEl || !homeEl) return;
 
-    const key = `${normalizeGoalieTeamToken(awayTeam?.team?.displayName)}@${normalizeGoalieTeamToken(homeTeam?.team?.displayName)}`;
-    const goalieData = nhlGoalieCache[key] || null;
+    const goalieData = findGoalieData(awayTeam?.team, homeTeam?.team);
 
     const advantage = getGoalieAdvantage(goalieData?.away || null, goalieData?.home || null);
     awayEl.innerHTML = buildGoalieLineHTML(awayTeam.team.abbreviation, goalieData?.away || null, advantage === 'A');
