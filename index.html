@@ -1083,7 +1083,8 @@ function parseGoaliePostGoalies(text){
         .replace(/!\[[^\]]*\]\([^)]*\)/g, '\n')
         .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
         .replace(/\r/g, '\n')
-        .replace(/ /g, ' ');
+        .replace(/\u00a0/g, ' ')
+        .replace(/^[ \t]*#{1,6}[ \t]*/gm, '');
 
     const headerRe = /\b([A-Z]{2,4})\s*@\s*([A-Z]{2,4})\b/g;
     const headers = [];
@@ -1112,8 +1113,10 @@ function parseGoaliePostGoalies(text){
             for(let k = before.length - 1; k >= Math.max(0, before.length - 6); k--){
                 const line = before[k];
                 if(notName.test(line)) continue;
-                if(/^[A-Za-z][A-Za-z.\-' ]+$/.test(line) && line.split(/\s+/).length >= 2 && line.split(/\s+/).length <= 4){
-                    name = toGoalieNameCase(line);
+                const words = line.split(/\s+/);
+                if(words.every(w => /^[A-Z]{2,4}$/.test(w))) continue; // team abbreviations, e.g. "FLA CAR"
+                if(/^[\p{L}][\p{L}.\-' ]+$/u.test(line) && words.length >= 2 && words.length <= 4){
+                    name = line === line.toUpperCase() ? toGoalieNameCase(line) : line;
                     break;
                 }
             }
@@ -1228,17 +1231,23 @@ async function fetchNHLGoalies(forceRefresh = false, leagueKey = currentLeague){
     }
 
     try {
-        const sources = [
-            { url: 'https://goaliepost.com/', parse: parseGoaliePostGoalies },
-            { url: 'https://www.dailyfantasyfuel.com/nhl/starting-goalies/', parse: parseDailyFantasyFuelGoalies }
-        ];
-
+        const validFor = parse => body => Object.keys(parse(body)).length > 0;
         let parsed = {};
-        for(const source of sources){
-            const text = await fetchTextWithFallback(source.url, body => Object.keys(source.parse(body)).length > 0);
-            parsed = text ? source.parse(text) : {};
-            if(Object.keys(parsed).length) break;
-            console.warn('NHL goalie source gave no matchups:', source.url, '(fetched ' + String(text || '').length + ' chars)');
+
+        // goaliepost.com: today's and tomorrow's starters live on separate pages
+        const gpPages = await Promise.all(['https://goaliepost.com/', 'https://goaliepost.com/tomorrow'].map(async url => {
+            const text = await fetchTextWithFallback(url, validFor(parseGoaliePostGoalies));
+            return text ? parseGoaliePostGoalies(text) : {};
+        }));
+        gpPages.forEach(page => Object.assign(parsed, page));
+
+        if(!Object.keys(parsed).length){
+            console.warn('NHL goalie source gave no matchups: goaliepost.com; trying dailyfantasyfuel.com');
+            const text = await fetchTextWithFallback('https://www.dailyfantasyfuel.com/nhl/starting-goalies/', validFor(parseDailyFantasyFuelGoalies));
+            parsed = text ? parseDailyFantasyFuelGoalies(text) : {};
+            if(!Object.keys(parsed).length){
+                console.warn('NHL goalie parse found no matchups (fetched ' + String(text || '').length + ' chars)');
+            }
         }
 
         if(Object.keys(parsed).length || !Object.keys(nhlGoalieCache || {}).length){
