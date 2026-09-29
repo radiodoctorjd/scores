@@ -895,7 +895,7 @@ function buildTextProxyUrls(url){
 async function fetchTextWithFallback(url, isValid){
     for(const candidate of buildTextProxyUrls(url)){
         try {
-            const res = await fetchWithTimeout(candidate, candidate.includes('r.jina.ai') ? 8000 : 5000);
+            const res = await fetchWithTimeout(candidate, candidate.includes('r.jina.ai') ? 15000 : 6000);
             if(!res.ok) continue;
             if(candidate.includes('/get?url=')){
                 const data = await res.json();
@@ -1061,6 +1061,86 @@ function htmlToPlainText(text){
         .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&#0?39;|&apos;/g, "'").replace(/&quot;/g, '"');
 }
 
+const GOALIE_ABBR_ALIASES = { TBL:'TB', NJD:'NJ', SJS:'SJ', LAK:'LA', VGS:'VGK', UTA:'UTAH', MON:'MTL', WAS:'WSH' };
+
+function normalizeGoalieAbbr(value){
+    const abbr = String(value || '').toUpperCase().replace(/[^A-Z]/g, '');
+    return GOALIE_ABBR_ALIASES[abbr] || abbr;
+}
+
+function goalieAbbrKey(awayAbbr, homeAbbr){
+    return `abbr:${normalizeGoalieAbbr(awayAbbr)}@${normalizeGoalieAbbr(homeAbbr)}`;
+}
+
+function toGoalieNameCase(name){
+    return String(name || '').toLowerCase().replace(/(^|[\s\-'])([a-z])/g, (m, sep, ch) => sep + ch.toUpperCase());
+}
+
+// Parses goaliepost.com's "Today's Starters" cards. Each card reads (as text):
+//   AWAY @ HOME ... <away goalie> W-L-OT GAA ... CONFIRMED ... <home goalie> W-L-OT ... LIKELY ...
+function parseGoaliePostGoalies(text){
+    const cleaned = htmlToPlainText(text)
+        .replace(/!\[[^\]]*\]\([^)]*\)/g, '\n')
+        .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+        .replace(/\r/g, '\n')
+        .replace(/ /g, ' ');
+
+    const headerRe = /\b([A-Z]{2,4})\s*@\s*([A-Z]{2,4})\b/g;
+    const headers = [];
+    let m;
+    while((m = headerRe.exec(cleaned))){
+        headers.push({ away: m[1], home: m[2], start: m.index, end: headerRe.lastIndex });
+    }
+
+    const statusRe = /\b(CONFIRMED|UNCONFIRMED|LIKELY|PROJECTED|EXPECTED)\b/i;
+    const notName = /^(SCHEDULED|FINAL|LIVE|TODAY|TOMORROW|CONFIRMED|UNCONFIRMED|LIKELY|PROJECTED|EXPECTED|SCHEDULE|LATEST RAMBLINGS|GP X FEED|FOLLOW|W-L-OT|GAA|SV%|SO|R)$/i;
+    const data = {};
+
+    headers.forEach((h, idx) => {
+        const key = goalieAbbrKey(h.away, h.home);
+        if(data[key]) return;
+
+        const segment = cleaned.slice(h.end, idx + 1 < headers.length ? headers[idx + 1].start : cleaned.length);
+        const parts = segment.split(/W-L-OT/i);
+        if(parts.length < 3) return; // need a stats block for both goalies
+
+        const goalies = [];
+        for(let p = 1; p < parts.length && goalies.length < 2; p++){
+            // name: last name-like line before this stats block
+            const before = parts[p - 1].split('\n').map(l => l.trim()).filter(Boolean);
+            let name = '';
+            for(let k = before.length - 1; k >= Math.max(0, before.length - 6); k--){
+                const line = before[k];
+                if(notName.test(line)) continue;
+                if(/^[A-Za-z][A-Za-z.\-' ]+$/.test(line) && line.split(/\s+/).length >= 2 && line.split(/\s+/).length <= 4){
+                    name = toGoalieNameCase(line);
+                    break;
+                }
+            }
+
+            const after = parts[p];
+            const statusMatch = after.slice(0, 600).match(statusRe);
+            const record = (after.match(/\b\d{1,2}-\d{1,2}-\d{1,2}\b/) || [''])[0];
+            const gaa = (after.match(/\b\d{1,2}\.\d{2}\b/) || [''])[0];
+            const svPct = (after.match(/(?:^|[^\d])([01]?\.\d{3})\b/) || ['', ''])[1];
+
+            if(name){
+                goalies.push({
+                    name,
+                    status: statusMatch ? normalizeGoalieStatus(statusMatch[1]) : '',
+                    record, gaa, svPct
+                });
+            }
+        }
+
+        if(goalies.length){
+            data[key] = { away: goalies[0] || null, home: goalies[1] || null };
+        }
+    });
+
+    return data;
+}
+
 function parseDailyFantasyFuelGoalies(text){
     const normalized = htmlToPlainText(text)
         .replace(/\r/g, '\n')
@@ -1148,13 +1228,21 @@ async function fetchNHLGoalies(forceRefresh = false, leagueKey = currentLeague){
     }
 
     try {
-        const text = await fetchTextWithFallback(
-            'https://www.dailyfantasyfuel.com/nhl/starting-goalies/',
-            body => Object.keys(parseDailyFantasyFuelGoalies(body)).length > 0
-        );
-        nhlGoalieCache = parseDailyFantasyFuelGoalies(text);
-        if(!Object.keys(nhlGoalieCache).length){
-            console.warn('NHL goalie parse found no matchups (fetched ' + String(text || '').length + ' chars)');
+        const sources = [
+            { url: 'https://goaliepost.com/', parse: parseGoaliePostGoalies },
+            { url: 'https://www.dailyfantasyfuel.com/nhl/starting-goalies/', parse: parseDailyFantasyFuelGoalies }
+        ];
+
+        let parsed = {};
+        for(const source of sources){
+            const text = await fetchTextWithFallback(source.url, body => Object.keys(source.parse(body)).length > 0);
+            parsed = text ? source.parse(text) : {};
+            if(Object.keys(parsed).length) break;
+            console.warn('NHL goalie source gave no matchups:', source.url, '(fetched ' + String(text || '').length + ' chars)');
+        }
+
+        if(Object.keys(parsed).length || !Object.keys(nhlGoalieCache || {}).length){
+            nhlGoalieCache = parsed;
         }
         nhlGoalieCacheTime = Date.now();
     } catch (err) {
@@ -1229,6 +1317,9 @@ function buildGoalieLineHTML(teamAbbr, goalie, isAdvantage){
 }
 
 function findGoalieData(awayTeam, homeTeam){
+    const byAbbr = nhlGoalieCache[goalieAbbrKey(awayTeam?.abbreviation, homeTeam?.abbreviation)];
+    if(byAbbr) return byAbbr;
+
     const tok = normalizeGoalieTeamToken;
     const exact = nhlGoalieCache[`${tok(awayTeam?.displayName)}@${tok(homeTeam?.displayName)}`];
     if(exact) return exact;
@@ -1246,6 +1337,7 @@ function findGoalieData(awayTeam, homeTeam){
     };
 
     for(const key of Object.keys(nhlGoalieCache)){
+        if(key.startsWith('abbr:')) continue;
         const [srcAway, srcHome] = key.split('@');
         if(matches(srcAway, awayTeam) && matches(srcHome, homeTeam)) return nhlGoalieCache[key];
     }
