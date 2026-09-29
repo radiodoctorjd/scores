@@ -892,17 +892,20 @@ function buildTextProxyUrls(url){
     ];
 }
 
-async function fetchTextWithFallback(url){
+async function fetchTextWithFallback(url, isValid){
     for(const candidate of buildTextProxyUrls(url)){
         try {
             const res = await fetchWithTimeout(candidate, candidate.includes('r.jina.ai') ? 8000 : 5000);
             if(!res.ok) continue;
             if(candidate.includes('/get?url=')){
                 const data = await res.json();
-                if(data?.contents) return data.contents;
+                const contents = data?.contents;
+                if(contents && (!isValid || isValid(contents))) return contents;
+                if(contents) console.warn('[fetch] rejected content from', candidate, String(contents).length, 'chars:', String(contents).slice(0, 200));
             } else {
                 const body = await res.text();
-                if(body) return body;
+                if(body && (!isValid || isValid(body))) return body;
+                if(body) console.warn('[fetch] rejected content from', candidate, body.length, 'chars:', body.slice(0, 200));
             }
         } catch (err) {}
     }
@@ -1048,8 +1051,18 @@ function extractGoalieName(line){
     return match ? match[1].trim() : '';
 }
 
+function htmlToPlainText(text){
+    const src = String(text || '');
+    if(!/<\/?(div|span|p|li|td|h\d|a|br)\b/i.test(src)) return src;
+    return src
+        .replace(/<(script|style)[\s\S]*?<\/\1>/gi, '\n')
+        .replace(/<\/?(div|p|li|ul|ol|tr|td|th|h\d|section|article|br|span|a|button|table|tbody|thead)\b[^>]*>/gi, '\n')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&#0?39;|&apos;/g, "'").replace(/&quot;/g, '"');
+}
+
 function parseDailyFantasyFuelGoalies(text){
-    const normalized = String(text || '')
+    const normalized = htmlToPlainText(text)
         .replace(/\r/g, '\n')
         .replace(/\u00a0/g, ' ')
         .replace(/[ \t]+/g, ' ')
@@ -1135,7 +1148,10 @@ async function fetchNHLGoalies(forceRefresh = false, leagueKey = currentLeague){
     }
 
     try {
-        const text = await fetchTextWithFallback('https://www.dailyfantasyfuel.com/nhl/starting-goalies/');
+        const text = await fetchTextWithFallback(
+            'https://www.dailyfantasyfuel.com/nhl/starting-goalies/',
+            body => Object.keys(parseDailyFantasyFuelGoalies(body)).length > 0
+        );
         nhlGoalieCache = parseDailyFantasyFuelGoalies(text);
         if(!Object.keys(nhlGoalieCache).length){
             console.warn('NHL goalie parse found no matchups (fetched ' + String(text || '').length + ' chars)');
