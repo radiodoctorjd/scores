@@ -878,6 +878,16 @@ function fetchWithTimeout(url, timeoutMs = 5000){
         .finally(() => clearTimeout(timeoutId));
 }
 
+// ESPN only returns a short "featured" list for college sports unless you ask
+// for a specific group, and it caps events per response. groups=50 = all of
+// NCAA Division I men's basketball, groups=80 = all of FBS football; limit
+// raises the per-response cap.
+function scoreboardParams(leagueKey){
+    if(leagueKey === 'NCAAMB') return '&groups=50&limit=500';
+    if(leagueKey === 'NCAAFB') return '&groups=80&limit=500';
+    return '';
+}
+
 function buildTextProxyUrls(url){
     const u = new URL(url);
     const noScheme = `${u.host}${u.pathname}${u.search}`;
@@ -946,7 +956,7 @@ async function fetchLeagueRecentForm(){
     // ESPN's scoreboard endpoint only accepts a single date, not a range.
     // Fetch the last 14 days individually in parallel so each team can
     // accumulate up to 5 results for the "Last 5" and home/road split forms.
-    const groups = currentLeague === 'NCAAMB' ? '&groups=50' : '';
+    const groups = scoreboardParams(currentLeague);
     const dayOffsets = [-1,-2,-3,-4,-5,-6,-7,-8,-9,-10,-11,-12,-13,-14];
     const allEvents = [];
     const seen = new Set();
@@ -2587,7 +2597,7 @@ function renderGame(event, grid, leagueKey = currentLeague, opts = {}){
 // find just fine.
 async function fetchLiveScoreboardEvents(leagueKey){
     const endpoint = leagues[leagueKey];
-    const groups = leagueKey === 'NCAAMB' ? '&groups=50' : '';
+    const groups = scoreboardParams(leagueKey);
     const offsets = [0, -1, 1];
     const seen = new Set();
     const events = [];
@@ -2685,7 +2695,7 @@ async function loadGames(){
     let allEvents = [];
 
     for(let i = 0; i < offsets.length; i++){
-        const res = await fetch(`https://site.api.espn.com/apis/site/v2/sports/${endpoint}/scoreboard?dates=${getDate(offsets[i])}`);
+        const res = await fetch(`https://site.api.espn.com/apis/site/v2/sports/${endpoint}/scoreboard?dates=${getDate(offsets[i])}${scoreboardParams(currentLeague)}`);
         const data = await res.json();
 
         if(!data.events) continue;
@@ -2756,7 +2766,7 @@ async function fetchEventsForRefresh(){
     const seen = new Set();
 
     for(const offset of offsets){
-        const res = await fetch(`https://site.api.espn.com/apis/site/v2/sports/${endpoint}/scoreboard?dates=${getDate(offset)}`);
+        const res = await fetch(`https://site.api.espn.com/apis/site/v2/sports/${endpoint}/scoreboard?dates=${getDate(offset)}${scoreboardParams(currentLeague)}`);
         const data = await res.json();
 
         for(const event of (data.events || [])){
