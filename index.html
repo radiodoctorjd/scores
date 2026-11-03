@@ -342,6 +342,17 @@ header { padding:15px; text-align:center; font-size:24px; font-weight:bold; back
     background:rgba(22,163,74,0.12);
     color:#15803d;
 }
+.b2b-line { margin-top:6px; display:flex; justify-content:center; flex-wrap:wrap; gap:6px; }
+.b2b-badge {
+    display:inline-block;
+    font-size:12px;
+    font-weight:800;
+    padding:4px 10px;
+    border-radius:999px;
+    background:rgba(234,88,12,0.12);
+    color:#c2410c;
+    letter-spacing:0.01em;
+}
 
 
 .environment-line {
@@ -743,6 +754,9 @@ let mlbEnvironmentCache = {};
 let leagueFormCache = {};
 let teamFormCache = {};
 let teamSplitFormCache = { home: {}, away: {} };
+// leagueKey -> team abbreviation -> Set of local "YYYY-MM-DD" dates the team
+// has a game on. Used to flag teams playing the 2nd night of a back-to-back.
+let teamGameDates = {};
 
 const liveTab = document.createElement("div");
 liveTab.className = "tab" + (currentLeague === "LIVE" ? " active" : "");
@@ -941,6 +955,42 @@ function getWinnerAbbreviation(event){
     return null;
 }
 
+function recordTeamGameDates(leagueKey, events){
+    if(!teamGameDates[leagueKey]) teamGameDates[leagueKey] = {};
+    const map = teamGameDates[leagueKey];
+    (events || []).forEach(event => {
+        const day = toIsoDate(event?.date);
+        if(!day) return;
+        (event?.competitions?.[0]?.competitors || []).forEach(team => {
+            const abbr = team?.team?.abbreviation;
+            if(!abbr) return;
+            if(!map[abbr]) map[abbr] = new Set();
+            map[abbr].add(day);
+        });
+    });
+}
+
+// True if the team also played on the calendar day before this game.
+function isSecondOfBackToBack(leagueKey, teamAbbr, gameDate){
+    const dates = teamGameDates[leagueKey]?.[teamAbbr];
+    if(!dates) return false;
+    const prev = new Date(gameDate);
+    if(Number.isNaN(prev.getTime())) return false;
+    prev.setDate(prev.getDate() - 1);
+    return dates.has(toIsoDate(prev));
+}
+
+function buildBackToBackHTML(event, away, home, leagueKey){
+    if(leagueKey !== "NHL") return "";
+    const tired = [away, home]
+        .map(t => t?.team?.abbreviation)
+        .filter(abbr => abbr && isSecondOfBackToBack(leagueKey, abbr, event.date));
+    if(!tired.length) return "";
+    return `<div class="b2b-line">${tired.map(abbr =>
+        `<span class="b2b-badge" title="${abbr} also played the previous day">${abbr}: Back-to-back</span>`
+    ).join('')}</div>`;
+}
+
 function getTeamRecentForm(teamAbbr){
     return teamFormCache[teamAbbr] || '—';
 }
@@ -977,6 +1027,7 @@ async function fetchLeagueRecentForm(){
     }));
 
     console.log(`[Form] ${currentLeague}: fetched ${allEvents.length} events over last 14 days`);
+    recordTeamGameDates(currentLeague, allEvents);
 
     const overallFormMap = {};
     const splitFormMap = { home: {}, away: {} };
@@ -2538,6 +2589,7 @@ function renderGame(event, grid, leagueKey = currentLeague, opts = {}){
             </div>
         </div>
         ${seriesInfo ? `<div class="series-line"><span class="series-badge${seriesInfo.completed ? ' series-won' : ''}">${seriesInfo.summary}</span></div>` : ''}
+        ${buildBackToBackHTML(event, away, home, leagueKey)}
 
         ${leagueKey === "MLB" ? `
         <div class="pitchers">
@@ -2623,6 +2675,7 @@ async function fetchLiveScoreboardEvents(leagueKey){
         }
     }
 
+    recordTeamGameDates(leagueKey, events);
     return { events, ok: anySuccess };
 }
 
@@ -2707,6 +2760,8 @@ async function loadGames(){
             }
         });
     }
+
+    recordTeamGameDates(currentLeague, allEvents.map(e => e.event));
 
     const liveEvents = allEvents.filter(e => e.event.status.type.state === "in");
     const groupedEvents = [[], [], []];
