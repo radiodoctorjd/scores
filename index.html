@@ -59,7 +59,7 @@ header { padding:15px; text-align:center; font-size:24px; font-weight:bold; back
 
 .game { background:white; color:black; padding:14px; border-radius:14px; box-shadow:0 8px 24px rgba(2,6,23,0.12); }
 
-.team-line { display:flex; align-items:center; gap:8px; font-weight:800; font-size:16px; line-height:1.2; }
+.team-line { display:flex; align-items:center; flex-wrap:wrap; gap:8px; font-weight:800; font-size:16px; line-height:1.2; }
 .team-line img { width:26px; height:26px; object-fit:contain; flex:0 0 auto; }
 
 .matchup-text { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
@@ -342,16 +342,18 @@ header { padding:15px; text-align:center; font-size:24px; font-weight:bold; back
     background:rgba(22,163,74,0.12);
     color:#15803d;
 }
-.b2b-line { margin-top:6px; display:flex; justify-content:center; flex-wrap:wrap; gap:6px; }
+.b2b-badges { display:inline-flex; align-items:center; flex-wrap:wrap; gap:4px; }
 .b2b-badge {
     display:inline-block;
-    font-size:12px;
+    font-size:10px;
     font-weight:800;
-    padding:4px 10px;
+    letter-spacing:0.04em;
+    padding:2px 7px;
     border-radius:999px;
-    background:rgba(234,88,12,0.12);
+    background:rgba(234,88,12,0.14);
     color:#c2410c;
-    letter-spacing:0.01em;
+    white-space:nowrap;
+    cursor:help;
 }
 
 
@@ -980,15 +982,17 @@ function isSecondOfBackToBack(leagueKey, teamAbbr, gameDate){
     return dates.has(toIsoDate(prev));
 }
 
+const BACK_TO_BACK_LEAGUES = ["NHL", "NBA"];
+
 function buildBackToBackHTML(event, away, home, leagueKey){
-    if(leagueKey !== "NHL") return "";
+    if(!BACK_TO_BACK_LEAGUES.includes(leagueKey)) return "";
     const tired = [away, home]
         .map(t => t?.team?.abbreviation)
         .filter(abbr => abbr && isSecondOfBackToBack(leagueKey, abbr, event.date));
     if(!tired.length) return "";
-    return `<div class="b2b-line">${tired.map(abbr =>
-        `<span class="b2b-badge" title="${abbr} also played the previous day">${abbr}: Back-to-back</span>`
-    ).join('')}</div>`;
+    return `<span class="b2b-badges">${tired.map(abbr =>
+        `<span class="b2b-badge" title="${abbr} is on a back-to-back (also played the previous day)">${abbr} B2B</span>`
+    ).join('')}</span>`;
 }
 
 function getTeamRecentForm(teamAbbr){
@@ -2587,9 +2591,9 @@ function renderGame(event, grid, leagueKey = currentLeague, opts = {}){
                 <span class="matchup-at">@</span>
                 <img src="${home.team.logo}" alt="${home.team.abbreviation} logo"><span>${home.team.abbreviation}</span>
             </div>
+            ${buildBackToBackHTML(event, away, home, leagueKey)}
         </div>
         ${seriesInfo ? `<div class="series-line"><span class="series-badge${seriesInfo.completed ? ' series-won' : ''}">${seriesInfo.summary}</span></div>` : ''}
-        ${buildBackToBackHTML(event, away, home, leagueKey)}
 
         ${leagueKey === "MLB" ? `
         <div class="pitchers">
