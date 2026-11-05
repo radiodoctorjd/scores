@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<nowplaying>
+  <sched_time>14:32:10</sched_time>
+  <air_time>14:32:12</air_time>
+  <stack_pos>0</stack_pos>
+  <title>Here Comes The Sun</title>
+  <artist>The Beatles</artist>
+  <album>Abbey Road</album>
+  <trivia></trivia>
+  <category>MUS</category>
+  <cart>1234</cart>
+  <intro>0:12</intro>
+  <end>F</end>
+  <station>WAAA</station>
+  <duration>00:03:05</duration>
+  <media_type>SONG</media_type>
+</nowplaying>

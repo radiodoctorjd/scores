@@ -1,0 +1,83 @@
+{
+  "log_level": "INFO",
+  "log_file": "rdsbridge.log",
+  "web": {
+    "enabled": true,
+    "bind": "127.0.0.1",
+    "port": 8080,
+    "username": null,
+    "password": null
+  },
+  "stations": [
+    {
+      "name": "WAAA-FM",
+      "input": {
+        "type": "file",
+        "path": "C:\\WideOrbit\\NowPlaying\\WAAA.xml",
+        "poll_interval": 1.0
+      },
+      "filter": {
+        "field": "media_type",
+        "include": ["SONG"]
+      },
+      "non_music_action": "default",
+      "templates": {
+        "rt": ["Now playing {title} by {artist} on WAAA 101.1", "{title} on WAAA 101.1"],
+        "dps": ["{title} - {artist}", "{title}"]
+      },
+      "default": {
+        "rt": "WAAA 101.1 - Today's Best Music",
+        "dps": "WAAA 101.1"
+      },
+      "revert_after_duration": true,
+      "refresh_interval": 300,
+      "outputs": [
+        {
+          "name": "WAAA FMB80",
+          "device": "fmb80",
+          "transport": "tcp",
+          "host": "192.168.10.50",
+          "port": 5401
+        },
+        {
+          "name": "WAAA Inovonics 730",
+          "device": "inovonics730",
+          "transport": "tcp",
+          "host": "192.168.10.60",
+          "port": 10001
+        }
+      ]
+    },
+    {
+      "name": "WBBB-FM",
+      "input": {
+        "type": "udp",
+        "port": 5000
+      },
+      "match": {"station": "WBBB*"},
+      "filter": {
+        "field": "category",
+        "include": ["MUS*"],
+        "exclude": ["SPOT", "LINER"]
+      },
+      "templates": {
+        "rt": ["{title} - {artist}", "{title}"],
+        "dps": ["{artist!u} - {title!u}", "{title!u}"]
+      },
+      "default": {
+        "rt": "WBBB 99.5 - Classic Hits",
+        "dps": "WBBB 99.5"
+      },
+      "outputs": [
+        {
+          "name": "WBBB FMB80 (UECP)",
+          "device": "fmb80",
+          "protocol": "uecp",
+          "transport": "udp",
+          "host": "192.168.20.50",
+          "port": 5402
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,3 @@
+# RDS Bridge needs only the Python standard library (Python 3.8+).
+# Optional: only needed if an encoder is connected by RS-232 ("transport": "serial").
+pyserial>=3.5

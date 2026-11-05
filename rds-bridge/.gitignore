@@ -1,0 +1,6 @@
+config.json
+config.json.bak
+config.json.tmp
+*.log
+*.log.*
+__pycache__/

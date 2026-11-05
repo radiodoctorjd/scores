@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<NowPlaying>
+  <Event status="playing">
+    <Station>WBBB</Station>
+    <Title>Dancing Queen</Title>
+    <Artist>ABBA</Artist>
+    <Category>MUS</Category>
+    <Duration>230000</Duration>
+  </Event>
+  <Event status="next">
+    <Station>WBBB</Station>
+    <Title>Africa</Title>
+    <Artist>Toto</Artist>
+    <Category>MUS</Category>
+    <Duration>295000</Duration>
+  </Event>
+</NowPlaying>
