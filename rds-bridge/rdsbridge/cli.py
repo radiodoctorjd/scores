@@ -15,13 +15,56 @@ from . import config as config_mod
 from .monitor import Monitor
 
 
+def app_dir() -> str:
+    """Folder that holds config.json: next to RDSBridge.exe, or the project folder."""
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _windows_console_setup():
+    """Set the window title and turn off QuickEdit.
+
+    With QuickEdit on, a stray click in the console window pauses all output,
+    which freezes the program until someone presses a key.
+    """
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        k32.SetConsoleTitleW("RDS Bridge")
+        handle = k32.GetStdHandle(-10)  # STD_INPUT_HANDLE
+        mode = ctypes.c_uint32()
+        if k32.GetConsoleMode(handle, ctypes.byref(mode)):
+            k32.SetConsoleMode(handle, (mode.value & ~0x0040) | 0x0080)  # -QUICK_EDIT, +EXTENDED_FLAGS
+    except Exception:
+        pass
+
+
+def _first_run_config(path: str) -> bool:
+    """Create config.json from config.example.json with every encoder output disabled."""
+    import json
+    example = os.path.join(app_dir(), "config.example.json")
+    if not os.path.exists(example):
+        return False
+    with open(example, "r", encoding="utf-8") as fh:
+        raw = json.load(fh)
+    for station in raw.get("stations", []):
+        for out in station.get("outputs", []):
+            out["enabled"] = False
+    config_mod.save(path, raw)
+    return True
+
+
 def _setup_logging(level: str, log_file: str | None):
     root = logging.getLogger()
     root.setLevel(getattr(logging, str(level).upper(), logging.INFO))
     fmt = logging.Formatter("%(asctime)s %(levelname)-7s %(message)s", "%Y-%m-%d %H:%M:%S")
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(fmt)
-    root.addHandler(handler)
+    if sys.stdout is not None:
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(fmt)
+        root.addHandler(handler)
     if log_file:
         fh = logging.handlers.RotatingFileHandler(log_file, maxBytes=5_000_000, backupCount=5, encoding="utf-8")
         fh.setFormatter(fmt)
@@ -71,15 +114,26 @@ def _test_xml(cfg: dict, path: str, station_name: str | None) -> int:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="rdsbridge", description="WideOrbit now-playing to RDS encoders (Audemat FMB80, Inovonics 730)")
-    ap.add_argument("-c", "--config", default="config.json", help="config file (default: config.json)")
+    ap.add_argument("-c", "--config", help="config file (default: config.json next to the program)")
     ap.add_argument("--check", action="store_true", help="validate the config and exit")
     ap.add_argument("--test-xml", metavar="FILE", help="parse a WideOrbit XML file and print what would be sent (sends nothing)")
     ap.add_argument("--station", help="with --test-xml: only this station")
     ap.add_argument("--log-level", help="DEBUG, INFO, WARNING (overrides config)")
     ap.add_argument("--no-web", action="store_true", help="do not start the web debug screen")
+    ap.add_argument("--open", action="store_true", help="open the web screen in a browser after starting")
     ap.add_argument("--version", action="version", version=f"rdsbridge {__version__}")
     args = ap.parse_args(argv)
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")  # never crash on odd characters in a console
+    args.config = os.path.abspath(args.config or os.path.join(app_dir(), "config.json"))
 
+    created = False
+    if not os.path.exists(args.config) and not (args.check or args.test_xml):
+        created = _first_run_config(args.config)
+        if created:
+            print(f"First run: created {args.config} from config.example.json.")
+            print("All encoder outputs are disabled until you edit them in the web screen (Settings tab).")
     try:
         raw = config_mod.load(args.config)
         cfg = config_mod.resolve(raw)
@@ -94,12 +148,16 @@ def main(argv=None) -> int:
     if args.test_xml:
         return _test_xml(cfg, args.test_xml, args.station)
 
-    _setup_logging(args.log_level or cfg["log_level"], cfg.get("log_file"))
+    _windows_console_setup()
+    log_file = cfg.get("log_file")
+    if log_file and not os.path.isabs(log_file):
+        log_file = os.path.join(os.path.dirname(args.config), log_file)
+    _setup_logging(args.log_level or cfg["log_level"], log_file)
     log = logging.getLogger("rdsbridge")
     from .engine import App
 
     monitor = Monitor(cfg["monitor_size"])
-    app = App(raw, os.path.abspath(args.config), monitor)
+    app = App(raw, args.config, monitor)
     app.start()
     log.info("RDS Bridge %s started with %d station(s)", __version__, len(cfg["stations"]))
 
@@ -111,9 +169,15 @@ def main(argv=None) -> int:
             serve_in_background(server)
             host = cfg["web"]["bind"]
             shown = "localhost" if host in ("0.0.0.0", "127.0.0.1", "") else host
-            log.info("Debug / customize screen: http://%s:%s/", shown, cfg["web"]["port"])
+            url = f"http://{shown}:{cfg['web']['port']}/"
+            log.info("Debug / customize screen: %s", url)
+            if args.open or created:
+                import webbrowser
+                webbrowser.open(url)
         except OSError as exc:
-            log.error("Could not start the web screen on port %s: %s", cfg["web"]["port"], exc)
+            log.error("Could not start the web screen on port %s: %s (is RDS Bridge already running?)",
+                      cfg["web"]["port"], exc)
+    log.info("Config: %s   (press Ctrl+C to stop)", args.config)
 
     done = threading.Event()
 

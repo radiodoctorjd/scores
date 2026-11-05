@@ -10,29 +10,76 @@ stations, and each station can feed any number of encoders.
   or byte sequence sent to each encoder, and the encoder's reply.
 - **Customization:** a web editor for the text templates, default/idle text, music filter and encoder
   commands. It has a live preview, a "test with sample XML" box and a manual override. Changes apply without a restart.
-- Only the Python standard library is needed (Python 3.8 or newer). `pyserial` is optional, for serial encoders.
+- Runs on Windows as a standalone `RDSBridge.exe` (no Python needed), or from source with Python 3.8+
+  (standard library only; `pyserial` is optional, for serial encoders).
 
-## Quick start (Windows)
+## Running it on Windows
 
-1. Install Python 3 from python.org (tick "Add Python to PATH").
-2. Copy `config.example.json` to `config.json` and edit the station names, the WideOrbit file path or port,
-   and the encoder IP addresses and ports.
-3. Check the config, then try it on a sample file without sending anything:
-   ```bash
-   python -m rdsbridge --config config.json --check
-   ```
-   ```bash
-   python -m rdsbridge --config config.json --test-xml samples\wideorbit_nowplaying.xml
-   ```
-4. Run it (or double-click `run.bat`):
-   ```bash
-   python -m rdsbridge --config config.json
-   ```
-5. Open **http://localhost:8080/** for the debug and customization screen.
+Everything for this program is in this one folder (`rds-bridge`).
 
-To run it unattended, install it as a Windows service with [NSSM](https://nssm.cc/)
-(`nssm install RDSBridge`, program `python.exe`, arguments `-m rdsbridge --config config.json`,
-startup directory this folder), or start it from Task Scheduler at boot.
+### Option 1: the ready-made Windows program (no Python needed)
+
+1. On GitHub, open **Actions → "RDS Bridge - Windows build"**, click the newest green run and download
+   **RDSBridge-windows** under *Artifacts*. You get a zip file.
+2. Unzip it somewhere permanent, e.g. `C:\RDSBridge`.
+3. Double-click **`Start RDS Bridge.bat`**. On the first run it creates `config.json` from the example,
+   with every encoder output **disabled**, and opens the web screen in your browser.
+4. On the **Settings** tab, enter your stations, the WideOrbit file path or port, and the encoder IP
+   addresses and ports. Set the outputs to `"enabled": true`, then click **Save & apply**.
+   (In JSON, Windows paths need double backslashes, e.g. `"C:\\WO\\NowPlaying.xml"`, or use forward slashes.)
+5. If Windows Firewall asks, allow RDS Bridge on your **private/domain** network so WideOrbit can reach it.
+
+The downloaded folder looks like this:
+
+```
+RDSBridge\
+  RDSBridge.exe              the program
+  _internal\                 files the program needs (leave alone)
+  Start RDS Bridge.bat       start it in a window and open the web screen
+  Install autostart.bat      start it automatically with Windows (runs in the background)
+  Remove autostart.bat       undo that
+  config.example.json        example settings (your settings go in config.json)
+  samples\                   example WideOrbit XML files
+  tools\                     scripts used by the autostart .bat files
+```
+
+**Start automatically with Windows:** double-click **`Install autostart.bat`** and approve the admin prompt.
+It creates a Windows scheduled task named "RDS Bridge". The task:
+- starts the program at boot, before anyone logs in
+- restarts it within a minute if it ever stops
+- adds a firewall rule so WideOrbit can reach it
+
+It asks which account to run as. Press Enter for SYSTEM, or enter a Windows account if WideOrbit writes
+its XML to a **network share**, because SYSTEM usually can't read shares. While the background copy is
+running, use the web screen (http://localhost:8080/) rather than also starting `Start RDS Bridge.bat`.
+Remove it with **`Remove autostart.bat`**.
+
+Logs go to `rdsbridge.log` next to `config.json`. The file rotates at 5 MB and keeps 5 old copies.
+
+**Building the .exe yourself:** on a Windows PC with Python 3 installed, double-click
+**`Build Windows exe.bat`**. The program appears in `dist\RDSBridge` (plus `dist\RDSBridge-windows.zip`).
+The GitHub build does the same on a Windows machine, and also runs all tests and a smoke test of the
+finished `.exe`. To publish a permanent download on the GitHub Releases page, push a tag such as
+`rds-bridge-v1.0.0`.
+
+### Option 2: run from source with Python
+
+1. Install Python 3.8 or newer from python.org (tick "Add python.exe to PATH").
+2. Download this `rds-bridge` folder and double-click **`Start RDS Bridge.bat`**. When there is no `.exe`
+   in the folder it runs the Python source instead. The first run works the same as in Option 1.
+   `Install autostart.bat` also works with the Python source.
+
+From a command prompt in the folder you can also check the config, or see what a sample file would send
+without sending anything:
+
+```bash
+python -m rdsbridge --check
+```
+```bash
+python -m rdsbridge --test-xml samples\wideorbit_nowplaying.xml
+```
+
+`config.json` is always looked up next to the program (or pass `--config path\to\file.json`).
 
 ## Setting up WideOrbit
 

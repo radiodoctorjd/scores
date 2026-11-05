@@ -6,6 +6,7 @@ import base64
 import hmac
 import json
 import os
+import sys
 import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -13,7 +14,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from . import __version__
 from .config import ConfigError
 
-STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):  # PyInstaller build
+    STATIC = os.path.join(sys._MEIPASS, "rdsbridge", "static")
+else:
+    STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+
+
+class _Server(ThreadingHTTPServer):
+    # On Windows SO_REUSEADDR lets a second copy silently share the port; refuse instead.
+    allow_reuse_address = os.name != "nt"
+    daemon_threads = True
 
 
 def make_server(app, web_cfg: dict) -> ThreadingHTTPServer:
@@ -121,9 +131,7 @@ def make_server(app, web_cfg: dict) -> ThreadingHTTPServer:
                 return self._error(f"{type(exc).__name__}: {exc}", 500)
             self._error("not found", 404)
 
-    server = ThreadingHTTPServer((web_cfg["bind"], int(web_cfg["port"])), Handler)
-    server.daemon_threads = True
-    return server
+    return _Server((web_cfg["bind"], int(web_cfg["port"])), Handler)
 
 
 def serve_in_background(server) -> threading.Thread:

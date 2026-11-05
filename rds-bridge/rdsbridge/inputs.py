@@ -19,6 +19,8 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .config import describe_input
+
+REUSE_ADDR = os.name != "nt"  # on Windows SO_REUSEADDR allows two programs on one port
 from .wideorbit import extract_documents
 
 
@@ -107,7 +109,8 @@ class FileInput(Input):
 class UdpInput(Input):
     def start(self):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if REUSE_ADDR:
+            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind((self.cfg["bind"], self.cfg["port"]))
         self.sock.settimeout(1.0)
         self.state = "listening"
@@ -132,7 +135,8 @@ class UdpInput(Input):
 class TcpInput(Input):
     def start(self):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if REUSE_ADDR:
+            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind((self.cfg["bind"], self.cfg["port"]))
         self.sock.listen(8)
         self.sock.settimeout(1.0)
@@ -221,8 +225,11 @@ class HttpInput(Input):
             def log_message(self, *args):
                 pass
 
-        self.server = ThreadingHTTPServer((self.cfg["bind"], self.cfg["port"]), Handler)
-        self.server.daemon_threads = True
+        class Server(ThreadingHTTPServer):
+            allow_reuse_address = REUSE_ADDR
+            daemon_threads = True
+
+        self.server = Server((self.cfg["bind"], self.cfg["port"]), Handler)
         self.state = "listening"
         self._spawn(self.server.serve_forever)
 
